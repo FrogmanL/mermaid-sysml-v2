@@ -904,7 +904,7 @@ action def ChargeBattery {
   // it does (first/then succession). Should parse without throwing; a
   // succession running through `decide`/`merge` is simply not recorded
   // (the chain breaks there), not misattributed to the wrong node.
-  it('does not throw on the real Decision Example idioms, not bridging successions through decide/merge', () => {
+  it('parses the real Decision Example end to end: merge, decide, and the loop-back all as real graph edges', () => {
     const model = parseSysml(`sysml-v2
 package 'Decision Example' {
   action def MonitorBattery { out charge : Real; }
@@ -928,17 +928,20 @@ package 'Decision Example' {
     if (def?.kind !== 'actionDef') throw new Error('expected actionDef');
     expect(def.hasStart).toBe(true);
     expect(def.hasDone).toBe(true);
-    // start -> merge -> monitor -> decide -> {addCharge, endCharging} all run
-    // through control nodes this round doesn't model, so none of those are
-    // recorded — not even a misleading "start -> monitor" that skips over
-    // the merge node in between. `action addCharge : AddCharge {...}` then
-    // `then continueCharging;` IS a real, directly-declared edge, so that one
-    // survives (continueCharging itself resolves to nothing drawable, since
-    // it's just a name given to the unmodeled merge node, but the edge is
-    // still correctly recorded here at the parse level) — likewise
-    // `endCharging -> __done__` (a real done pseudo-node, unlike the
-    // unmodeled control nodes).
+    expect(def.controlNodes).toEqual([
+      { id: 'continueCharging', kind: 'merge' },
+      { id: '__decide1__', kind: 'decide' },
+    ]);
+    // The full graph, including the merge's loop-back edge and both of
+    // decide's guarded branches (not chained to each other) — round 2 keeps
+    // every one of these, unlike round 1, which had to drop everything that
+    // ran through merge/decide.
     expect(def.successions).toEqual([
+      { from: '__start__', to: 'continueCharging', guard: undefined },
+      { from: 'continueCharging', to: 'monitor' },
+      { from: 'monitor', to: '__decide1__', guard: undefined },
+      { from: '__decide1__', to: 'addCharge', guard: 'monitor.batteryCharge < 100' },
+      { from: '__decide1__', to: 'endCharging', guard: 'monitor.batteryCharge >= 100' },
       { from: 'addCharge', to: 'continueCharging', guard: undefined },
       { from: 'endCharging', to: '__done__' },
     ]);
@@ -970,7 +973,10 @@ action def TakePicture {
   // by only recording a successor's own name as the next `lastActionName`
   // when it had a known `from` itself, rather than always propagating
   // forward.
-  it('does not chain a guarded branch off a sibling branch that also followed an unmodeled control node', () => {
+  // Regression: two guarded branches sitting side by side after a `decide`
+  // must both fan out from the *same* decision node, not chain off each
+  // other (the first branch's target becoming the second branch's source).
+  it('fans out two guarded branches from the same decide node, not chained to each other', () => {
     const model = parseSysml(`sysml-v2
 action def ChargeBattery {
   then decide;
@@ -981,7 +987,89 @@ action def ChargeBattery {
 }`);
     const def = model.definitions[0];
     if (def.kind !== 'actionDef') throw new Error('expected actionDef');
-    expect(def.successions).toEqual([]);
+    expect(def.controlNodes).toEqual([{ id: '__decide1__', kind: 'decide' }]);
+    expect(def.successions).toEqual([
+      { from: '__decide1__', to: 'addCharge', guard: 'a' },
+      { from: '__decide1__', to: 'endCharging', guard: 'b' },
+    ]);
+  });
+
+  it('fans out an unguarded fork the same way (Fork Join Example)', () => {
+    const model = parseSysml(`sysml-v2
+action def MonitorBrakePedal { out pressure : BrakePressure; }
+action def MonitorTraction { out modFreq : Real; }
+action def Braking { in brakePressure : BrakePressure; in modulationFrequency : Real; }
+
+action def Brake {
+  action turnOn : TurnOn;
+  then fork;
+    then monitorBrakePedal;
+    then monitorTraction;
+    then braking;
+
+  action monitorBrakePedal : MonitorBrakePedal { out brakePressure; }
+  then joinNode;
+
+  action monitorTraction : MonitorTraction { out modulationFrequency; }
+  then joinNode;
+
+  flow from monitorBrakePedal.brakePressure to braking.brakePressure;
+  flow from monitorTraction.modulationFrequency to braking.modulationFrequency;
+
+  action braking : Braking { in brakePressure; in modulationFrequency; }
+  then joinNode;
+
+  join joinNode;
+  then done;
+}`);
+    const def = model.definitions.find((d) => d.name === 'Brake');
+    if (def?.kind !== 'actionDef') throw new Error('expected actionDef');
+    expect(def.controlNodes).toEqual([
+      { id: '__fork1__', kind: 'fork' },
+      { id: 'joinNode', kind: 'join' },
+    ]);
+    expect(def.successions).toEqual([
+      { from: 'turnOn', to: '__fork1__', guard: undefined },
+      { from: '__fork1__', to: 'monitorBrakePedal', guard: undefined },
+      { from: '__fork1__', to: 'monitorTraction', guard: undefined },
+      { from: '__fork1__', to: 'braking', guard: undefined },
+      { from: 'monitorBrakePedal', to: 'joinNode' },
+      { from: 'monitorTraction', to: 'joinNode' },
+      { from: 'braking', to: 'joinNode' },
+      { from: 'joinNode', to: '__done__' },
+    ]);
+    expect(def.flows).toEqual([
+      { ends: ['monitorBrakePedal.brakePressure', 'braking.brakePressure'] },
+      { ends: ['monitorTraction.modulationFrequency', 'braking.modulationFrequency'] },
+    ]);
+  });
+
+  it('parses a loop action, keeping its own node and until condition, one level deep', () => {
+    const model = parseSysml(`sysml-v2
+action def MonitorBattery { out charge : Real; }
+action def AddCharge { in charge : Real; }
+action def EndCharging;
+
+action def ChargeBattery {
+  loop action charging {
+    action monitor : MonitorBattery { out charge; }
+    then if monitor.charge < 100 {
+      action addCharge : AddCharge { in charge = monitor.charge; }
+    }
+  } until charging.monitor.charge >= 100;
+  then action endCharging : EndCharging;
+  then done;
+}`);
+    const def = model.definitions.find((d) => d.name === 'ChargeBattery');
+    if (def?.kind !== 'actionDef') throw new Error('expected actionDef');
+    expect(def.actions).toEqual([
+      { name: 'charging', isLoop: true, until: 'charging.monitor.charge >= 100' },
+      { name: 'endCharging', type: 'EndCharging' },
+    ]);
+    expect(def.successions).toEqual([
+      { from: 'charging', to: 'endCharging' },
+      { from: 'endCharging', to: '__done__' },
+    ]);
   });
 
   it('parses action def specialization (:>) the same way as any other definition kind', () => {

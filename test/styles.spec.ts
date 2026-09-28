@@ -35,6 +35,8 @@ describe('getStyles', () => {
       ['line', 'succession-line'],
       ['polygon', 'succession-arrow'],
       ['text', 'succession-label'],
+      ['polygon', 'action-decision'],
+      ['rect', 'action-fork-join'],
     ];
     for (const [el, cls] of elementClassed) {
       expect(css).toMatch(new RegExp(`${el}\\.${cls}\\s*\\{`));

@@ -6,18 +6,19 @@ subset of the [SysML v2](https://www.omg.org/spec/SysMLv2/) textual notation
 `attribute def`, `enum def`, `use case def`, `action def`, every connector-
 establishing form this subset resolves, specialization (`:>`)/subsetting
 (`:>`)/redefinition (`:>>`), requirement/use-case traceability (`satisfy`/
-`verify`/`trace`/`allocate`/`include`, plus requirement derivation), and a
-first pass at activity/action diagrams (`first`/`then` succession, guarded
-succession, start/done, data flow) — matching the OMG's own graphical
-notation as closely as this subset's scope allows: compartmented definition
-boxes, rounded usage boxes, a recursive composition tree for plain
-containment, an internal-block-diagram-style container with connector lines
-(binary, `::>`-bound, or n-ary) where a part's containment also has
-connectors, a hollow-triangle generalization arrow between two definition
-boxes that specialize one another, dashed dependency arrows for requirement/
-use-case traceability, stick-figure actors with a plain association line for
-use cases, and a genuine flowchart (start/done nodes, solid succession
-arrows, dashed data-flow arrows) for actions.
+`verify`/`trace`/`allocate`/`include`, plus requirement derivation), and
+activity/action diagrams — succession (plain and guarded), start/done, data
+flow, and the `decide`/`merge`/`fork`/`join` control-node vocabulary —
+matching the OMG's own graphical notation as closely as this subset's scope
+allows: compartmented definition boxes, rounded usage boxes, a recursive
+composition tree for plain containment, an internal-block-diagram-style
+container with connector lines (binary, `::>`-bound, or n-ary) where a part's
+containment also has connectors, a hollow-triangle generalization arrow
+between two definition boxes that specialize one another, dashed dependency
+arrows for requirement/use-case traceability, stick-figure actors with a
+plain association line for use cases, and a genuine flowchart — start/done
+nodes, decision/merge diamonds, fork/join bars, solid succession arrows,
+dashed data-flow arrows — for actions.
 
 ## Why this exists
 
@@ -183,47 +184,62 @@ covers:
     activity/behavior composition riding on top of use cases, not a
     use-case-diagram relationship, and are earmarked for the activity-
     diagram work instead (see "Extending this").
-- **Activity/action diagrams (round 1)** — grounded against the OMG's own
-  training corpus (`Systems-Modeling/SysML-v2-Release/sysml/src/training/
-  "14. Action Definitions"` through `"17. Control"`), covering the plain,
-  non-branching subset of what those topics show:
-  - `action def Name [:> Super] { in/out params; nested action usages; flow ...; first/then succession; done; }`,
+- **Activity/action diagrams** — grounded against the OMG's own training
+  corpus (`Systems-Modeling/SysML-v2-Release/sysml/src/training/
+  "14. Action Definitions"` through `"17. Control"`):
+  - `action def Name [:> Super] { in/out params; nested action usages; flow ...; first/then succession; decide/merge/fork/join; done; }`,
     or a bare `action name : Type { ... }` usage (discarded when body-less,
-    like a part usage). With no succession/start/done/nested actions, it's
-    a plain leaf box («action def»/«action») showing just its parameters —
-    same "one level deep" convention as the connector container otherwise:
-    a nested `action name : Type { ... }` becomes one flowchart node, not
-    expanded recursively.
+    like a part usage). With no flowchart content (no succession/start/done/
+    nested actions/control nodes), it's a plain leaf box («action def»/
+    «action») showing just its parameters — same "one level deep" convention
+    as the connector container otherwise: a nested `action name : Type { ... }`
+    becomes one flowchart node, not expanded recursively.
   - With flowchart content, a genuine flowchart: a filled **start** node
     (`first start;`), a bordered "final" **done** node (`then done;`),
-    rounded action nodes, and solid succession arrows between them — laid
-    out top-to-bottom by longest-path-from-start layering (a plain layered
+    rounded action nodes, unfilled **decision/merge diamonds**, filled
+    **fork/join bars**, and solid succession arrows between them — laid out
+    top-to-bottom by longest-path-from-start layering (a plain layered
     layout, no edge-crossing minimization).
   - **Succession** — `first A [if guard] then B;`, the bare `[if guard]
-    then B;` shorthand (implicit predecessor: whichever action was most
-    recently declared or succeeded — the idiom the OMG's own examples use),
-    and the `then action B: Type { ... }` declaration-succession shorthand.
-    A guard shows as a bracketed label (`[guard]`) on the arrow.
+    then B;` shorthand (implicit predecessor: whichever action/control node
+    was most recently declared or succeeded — the idiom the OMG's own
+    examples use), and the `then action B: Type { ... }` declaration-
+    succession shorthand. A guard shows as a bracketed label (`[guard]`) on
+    the arrow.
+  - **`decide`/`fork`** — a branch point: several sibling statements
+    immediately following it (`if g1 then X; if g2 then Y;` for `decide`, or
+    bare `then A; then B;` for `fork`) all fan out from the *same* node
+    rather than chaining to each other (confirmed necessary against the
+    OMG's own `Decision Example.sysml`/`Fork Join Example.sysml` — an
+    earlier version of this got it wrong). Unnamed in the source (as both
+    usually are), so each gets a synthesized id (`__decide1__`, `__fork1__`,
+    ...) — internal only, never shown.
+  - **`merge`/`join`** — a convergence point: `then merge name;`/
+    `join name;` declares it, and any later bare `then name;` elsewhere in
+    the body (including a "loop-back" edge from further down the flow, as
+    in `Decision Example.sysml`) adds another incoming edge to the *same*
+    node, found by that name regardless of declaration order.
+  - **`loop [action] name { ... } [until cond];`** — its own body is skipped
+    structurally (one level deep, same as a nested action's) but still
+    becomes its own flowchart node, labeled `loop <name>`; the `until`
+    condition is kept but not yet shown on the node (see "Known
+    limitations").
   - **Flow** — `flow [name] from a.b to c.d;` between two nested actions'
     items, drawn as a dashed arrow (reusing the same shape built for
     satisfy/verify/trace/allocate/include/derive), distinct from a solid
     succession arrow.
-  - **Deliberately out of scope for this round**: `bind` (data binding —
-    parsed and discarded, not drawn) and the `decide`/`merge`/`fork`/`join`/
-    `loop` control-node vocabulary. A succession running through one of
-    those is simply **not recorded** — the chain breaks there rather than
-    being bridged with a misleading direct edge — see "Known limitations"
-    for exactly what that costs on a real, control-heavy example.
+  - **Deliberately out of scope**: `bind` (data binding — parsed and
+    discarded, not drawn) and expanding a `loop`'s own body.
 - `doc /* ... */` comments (shown as a hover tooltip on the box).
 - `import` statements and quoted (`'...'`) identifiers (parsed/tokenized
   correctly, then ignored).
 
-Everything else — the `decide`/`merge`/`fork`/`join`/`loop` control-node
-vocabulary, `bind`, state machines, views, `copy`, variability modeling
-(`variation`/`variant`), sequence-style `message ... to` interactions, port
-redefinition, expressions beyond a raw right-hand side — is outside this
-subset. The parser skips unrecognized constructs resiliently (structurally,
-brace-aware) rather than failing the whole diagram, so a real file mixing
+Everything else — `bind`, a `loop`'s own body, sequence diagrams, state
+machines, views, `copy`, variability modeling (`variation`/`variant`),
+sequence-style `message ... to` interactions, port redefinition, expressions
+beyond a raw right-hand side — is outside this subset. The parser skips
+unrecognized constructs resiliently (structurally, brace-aware) rather than
+failing the whole diagram, so a real file mixing
 supported and unsupported constructs still renders what it can.
 
 ### Validation corpus
@@ -245,13 +261,13 @@ UML/SysML visual language, not something this subset invented), but the
 use-case box's own compartmented-rectangle style — like the requirement
 box — wasn't independently checked against this deck's own Use Case Diagram
 pages. The action flowchart's node shapes (filled start circle, bordered
-"final" circle, rounded action box, solid succession arrow) follow the
-standard, stable UML/SysML activity-diagram convention rather than this
-subset's own invention, same reasoning as the use-case actors — but, also
-like use cases, wasn't independently checked against this deck's own
-Action/Activity Diagram pages. Everything else from page 48 on (remaining
-behavior notation, and the decision/fork/join/merge shapes this subset
-doesn't draw yet) is still out of scope here.
+"final" circle, rounded action box, unfilled decision/merge diamond, filled
+fork/join bar, solid succession arrow) follow the standard, stable UML/SysML
+activity-diagram convention rather than this subset's own invention, same
+reasoning as the use-case actors — but, also like use cases, wasn't
+independently checked against this deck's own Action/Activity Diagram pages.
+Everything else from page 48 on (remaining behavior notation, plus sequence
+diagrams entirely) is still out of scope here.
 
 Checked textual-syntax coverage against real `.sysml` files (read locally
 during development, not vendored into this repo except where noted) from:
@@ -268,14 +284,15 @@ during development, not vendored into this repo except where noted) from:
   directory (`Use Case Definition Example.sysml`, `Use Case Usage Example.sysml`)
   is what grounded `use case def`/usage/`actor`/`include`; its
   `training/"14. Action Definitions"` through `"17. Control"` (action defs,
-  succession, conditional succession, decision/fork/join/merge) drove the
-  activity/action-diagram support above — `Action Definition Example.sysml`,
-  `Action Succession Example-1/2.sysml`, `Action Shorthand Example.sysml`,
-  and `Conditional Succession Example-1/2.sysml` for the parts this subset
-  models, `Decision Example.sysml`/`Fork Join Example.sysml`/
-  `Control Structures Example.sysml` for the control-node vocabulary it
-  deliberately doesn't (yet) — see "Known limitations" for exactly what
-  parsing those still-real files costs. `"18. Action Performance"` through
+  succession, conditional succession, decision/fork/join/merge) drove all of
+  the activity/action-diagram support above, start to finish —
+  `Action Definition Example.sysml`, `Action Succession Example-1/2.sysml`,
+  `Action Shorthand Example.sysml`, and `Conditional Succession
+  Example-1/2.sysml` for plain/guarded succession and start/done;
+  `Decision Example.sysml` and `Fork Join Example.sysml` for `decide`/
+  `merge` and `fork`/`join` respectively (both parse and render end to end
+  now — see the regression tests citing them); `Control Structures
+  Example.sysml` for `loop`. `"18. Action Performance"` through
   `"22. Opaque Actions"` weren't read; likely more out-of-scope territory.
 - **[GfSE/SysML-v2-Models](https://github.com/GfSE/SysML-v2-Models)** — a
   community-curated collection (Gesellschaft für Systems Engineering),
@@ -384,30 +401,26 @@ during development, not vendored into this repo except where noted) from:
   its actor column**, not just the compartmented rectangle — an
   include/specialization/derive arrow pointing at a use case with actors
   may anchor closer to the actor column than to the box itself.
-- **A succession running through `decide`/`merge`/`fork`/`join`/`loop`
-  isn't bridged — it's simply not recorded**, by design (see "Scope"
-  above). On the OMG's own `Decision Example.sysml` (start → merge →
-  monitor → decide → {addCharge, endCharging}, then addCharge/endCharging
-  both feeding back into the loop), only **one** of six real successions
-  survives (`addCharge -> continueCharging`, a direct, unconditional
-  `action`-then-`then` pair) — everything routed through `merge`/`decide`
-  is gone. This is the single biggest gap between "the action grammar
-  parses" and "the action diagram looks like the real one" — see
-  "Extending this."
-- **Two guarded branches sitting side by side right after an unmodeled
-  control node are correctly left disconnected from each other**
-  (`if a then X; if b then Y;` doesn't become `X -> Y`), but this means a
-  chain "broken" by a control node only recovers at the next *unconditional*
-  `action`/`first` statement — a model that's mostly branches, with few
-  unconditional actions, will show a sparse, disconnected-looking flowchart
-  even though nothing crashed or was silently corrupted.
 - **`bind` (data binding) is parsed and discarded, not drawn.** A parameter
   wired via `bind a.b = c;` shows no line at all — only `flow` produces the
   dashed data-flow arrow.
+- **A `loop`'s own body is skipped structurally, not expanded** — same
+  one-level-deep convention as a nested action's. Its `until` condition is
+  parsed and kept on the node (`ActionUsageNode.until`) but not yet shown
+  anywhere in the drawing; only the node's `loop <name>` label appears.
+- **A `decide`/`fork` node only stays a branch point across *consecutive*
+  sibling statements.** `then decide; if a then X; if b then Y;` correctly
+  fans out both branches from the same diamond; if something else (an
+  unrelated action declaration, say) sits between the two `if` statements,
+  the second one would no longer resolve against the decide node — not seen
+  in the corpus, but worth knowing if a real model interleaves them.
 - **A long guard label on a short vertical arrow can visually overlap the
   arrowhead** (see `examples/features/12-action-flowcharts.mmd`'s
-  `focus -> shoot` arrow) — same category of straight-line/no-real-routing
-  limitation as the specialization and dependency arrows above.
+  `focus -> shoot` arrow, or the decide/fork diamonds in
+  `examples/features/13-decision-fork-join-loop.mmd`) — same category of
+  straight-line/no-real-routing limitation as the specialization and
+  dependency arrows above; with several branches converging on one small
+  diamond or bar, labels and lines can visually crowd each other.
 - **Action containment is one level deep**, same convention as the
   connector container: a nested `action name : Type { ... }` becomes one
   flowchart node showing just its name, not its own further-nested actions,
@@ -461,9 +474,9 @@ one small file per feature cluster (definition/usage styling, the
 composition tree, the connector container, nested packages, resilience
 against unsupported constructs, every connector form, specialization
 arrows/subsets/redefines, requirements/traceability, attribute def/enum def,
-use cases, and action flowcharts) for a quick visual tour of the whole
-plugin; `index.html`'s dropdown has a "Feature showcase" group listing them
-all.
+use cases, action flowcharts, and decide/merge/fork/join/loop) for a quick
+visual tour of the whole plugin; `index.html`'s dropdown has a "Feature
+showcase" group listing them all.
 
 ## Development
 
@@ -478,47 +491,46 @@ npm run build   # emits dist/mermaid-sysml-v2.core.mjs + .d.ts files
 
 Natural next steps, roughly in order of value:
 
-1. **Activity/action diagrams, round 2: the `decide`/`merge`/`fork`/`join`/
-   `loop` control-node vocabulary.** Round 1 (see "Scope" above) covers
-   plain and guarded succession, start/done, and data flow; a decision
-   diamond, merge diamond, and fork/join bar are what's needed to stop a
-   succession from simply breaking every time it hits one of these — by far
-   the single highest-value item now, since (per "Known limitations") it's
-   the gap between "the action grammar parses" and "the OMG's own control-
-   heavy examples render as more than a couple of disconnected boxes." This
-   would also likely let use cases resolve their nested/`then`-chained
-   steps, not just their direct `include` members, since both share the
-   same underlying control-flow vocabulary.
-2. **Resolve a `by`/`to` traceability path through an instance's type**, not
+1. **Use cases resolving their nested/`then`-chained steps**, not just their
+   direct `include` members (see "Known limitations") — now that the
+   activity control-flow vocabulary is actually parsed (`decide`/`merge`/
+   `fork`/`join`/`loop`, succession, guards), reusing it for a use case
+   usage's own body is a much smaller lift than it was before that existed.
+2. **Sequence diagrams** — not scoped at all yet; the next diagram type to
+   ground against real examples (the OMG's own training corpus almost
+   certainly has one, same as every other diagram kind here) before
+   designing anything. Likely its own rendering concern again — lifelines
+   and messages over time, not a flowchart or a compartmented box.
+3. **Resolve a `by`/`to` traceability path through an instance's type**, not
    just a simple name — `examples/bvm.mmd`'s own `satisfy req001 by
    bvm.coinAcceptor;` needs this to ever draw an arrow: look up `bvm`'s
    recorded type (currently discarded, since a body-less top-level part
    usage has nothing else worth keeping today), then resolve `coinAcceptor`
    as a child within that type's own rendered container/tree box.
-3. **Recursive containment for the connector container**, not just the
+4. **Recursive containment for the connector container**, not just the
    composition tree — the tree already recurses (see "Scope" above); a child
    inside an IBD-style container whose own type has further containment and
    connectors currently just shows as a plain box with ports instead of
    expanding.
-4. **Real edge routing for the specialization/dependency/succession
+5. **Real edge routing for the specialization/dependency/succession
    arrows**, instead of a straight line clipped to each box's border — would
    fix the visual crossing noted in "Known limitations" for a dense grid
    layout.
-5. **A subsetting/redefinition arrow between two usages**, distinct from the
+6. **A subsetting/redefinition arrow between two usages**, distinct from the
    definition-level specialization arrow already drawn — the spec shows this
    as a separate dashed relationship line.
-6. **Requirement body constructs** — `require constraint`/`assume
+7. **Requirement body constructs** — `require constraint`/`assume
    constraint`/`objective`/`stakeholder`, and inline requirement text shown
    in the box itself rather than only as a hover tooltip (would need real
-   text wrapping — see item 8).
-7. **Hollow diamond for a reference (non-owning) containment**, contrasted
+   text wrapping — see item 9).
+8. **Hollow diamond for a reference (non-owning) containment**, contrasted
    with the filled diamond already drawn for composition.
-8. **Real text measurement** — the renderer currently estimates box width
+9. **Real text measurement** — the renderer currently estimates box width
    from character counts; swapping in `getBBox()`-based measurement (as
    mermaid's own class diagram does) would tighten box sizing and enable
-   wrapping long requirement text (see item 6) and fixing the guard-label
+   wrapping long requirement text (see item 7) and fixing the guard-label
    crowding noted in "Known limitations."
-9. Publishing to npm and registering in Mermaid's
+10. Publishing to npm and registering in Mermaid's
    [community integrations list](https://mermaid.js.org/ecosystem/integrations-community.html),
    and linking this project from the GitHub issue, once it's further along.
 

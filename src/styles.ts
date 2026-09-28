@@ -110,6 +110,14 @@ const getStyles = (options: any): string => `
 .sysml-v2 text.succession-label {
   fill: ${options.textColor ?? options.primaryTextColor ?? '#333'};
 }
+.sysml-v2 polygon.action-decision {
+  fill: ${options.mainBkg ?? options.primaryColor ?? '#eee'};
+  stroke: ${options.nodeBorder ?? options.primaryBorderColor ?? '#999'};
+  stroke-width: 1px;
+}
+.sysml-v2 rect.action-fork-join {
+  fill: ${options.nodeBorder ?? options.primaryBorderColor ?? '#999'};
+}
 `;
 
 export default getStyles;

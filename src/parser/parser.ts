@@ -7,6 +7,7 @@ import type {
   AttributeNode,
   ConnectionDefNode,
   ConnectorNode,
+  ControlNodeUsage,
   DefinitionNode,
   EnumDefNode,
   InterfaceDefNode,
@@ -1114,75 +1115,116 @@ function parseGuardExpression(p: ParserState): string {
     .trim();
 }
 
-const ACTION_CONTROL_NODE_KEYWORDS = new Set(['decide', 'merge', 'fork', 'join', 'loop']);
+const ACTION_BRANCH_NODE_KEYWORDS = new Set(['decide', 'fork']);
+const ACTION_MERGE_NODE_KEYWORDS = new Set(['merge', 'join']);
+
+/** Registers a `decide`/`merge`/`fork`/`join` node under its given name (or a synthesized one for an unnamed `decide`/`fork`) — idempotent by id, since a merge/join's name is typically declared once and then referenced by bare name from elsewhere in the body. */
+function registerControlNode(def: ActionDefNode, kind: ControlNodeUsage['kind'], name: string | undefined): string {
+  const id = name ?? `__${kind}${def.controlNodes.filter((c) => c.kind === kind).length + 1}__`;
+  if (!def.controlNodes.some((c) => c.id === id)) {
+    def.controlNodes.push({ id, kind });
+  }
+  return id;
+}
 
 /**
  * Consumes a `then`/`first ... then` target, resolving it to a plain action
- * name when it is one. `done` resolves to the `'__done__'` pseudo-node (and
- * sets `hasDone`, so the renderer draws the "final" circle) — unlike a
- * control node (`decide`/`merge`/`fork`/`join`/`loop`, optionally followed
- * by its own name), which returns `undefined`: round 2 territory, not
- * modeled here (see `ActionDefNode`'s doc comment).
+ * name, the `'__done__'` pseudo-node (`done`, which also sets `hasDone`),
+ * or a `decide`/`merge`/`fork`/`join` control node's id (registering it).
+ * `isBranchPoint` tells the caller whether this is a `decide`/`fork` —
+ * a fan-out point where several immediately-following sibling statements
+ * (`if g1 then X; if g2 then Y;` or `then A; then B;`) all branch off the
+ * *same* node rather than chaining off each other (see `parseActionBody`).
  */
-function parseSuccessionTarget(p: ParserState, def: ActionDefNode): string | undefined {
+function parseSuccessionTarget(p: ParserState, def: ActionDefNode): { id: string | undefined; isBranchPoint: boolean } {
   const keyword = p.advance().value;
   if (keyword === 'done') {
     def.hasDone = true;
-    return '__done__';
+    return { id: '__done__', isBranchPoint: false };
   }
-  if (ACTION_CONTROL_NODE_KEYWORDS.has(keyword)) {
-    if (p.atIdent()) p.advance(); // the control node's own name, if given
-    return undefined;
+  if (ACTION_BRANCH_NODE_KEYWORDS.has(keyword) || ACTION_MERGE_NODE_KEYWORDS.has(keyword)) {
+    const name = p.atIdent() ? p.advance().value : undefined;
+    const id = registerControlNode(def, keyword as ControlNodeUsage['kind'], name);
+    return { id, isBranchPoint: ACTION_BRANCH_NODE_KEYWORDS.has(keyword) };
   }
-  return keyword;
+  return { id: keyword, isBranchPoint: false };
 }
 
 /**
  * Handles what follows a (possibly absent) guard: either an optional `then`
  * plus a target — recording a succession from `from` only when `from` is
  * itself known — or an inline `{ ... }` branch body (`if guard { ... }`,
- * round 2 territory), skipped structurally. Returns the new
- * `lastActionName` the caller should track: the resolved target on success,
- * or `undefined` otherwise — deliberately *not* falling back to `from`, so
- * that two guarded branches sitting side by side after an unmodeled control
- * node (`if a then X; if b then Y;`, as in the OMG's own Decision Example)
- * don't get chained to each other as if one caused the next.
+ * still out of scope — see `ActionDefNode`'s doc comment), skipped
+ * structurally. Returns the resolved target and whether it's a branch
+ * point, or `{ id: undefined, isBranchPoint: false }` when nothing usable
+ * was found — deliberately *not* falling back to `from`, so unrelated
+ * failures don't get silently bridged over.
  */
 function parseSuccessionThenTarget(
   p: ParserState,
   def: ActionDefNode,
   from: string | undefined,
   guard: string | undefined
-): string | undefined {
+): { id: string | undefined; isBranchPoint: boolean } {
   if (p.at('then')) p.advance();
   if (p.at('{')) {
     skipBalancedBraceBlock(p);
     if (p.at(';')) p.advance();
-    return undefined;
+    return { id: undefined, isBranchPoint: false };
   }
-  const to = parseSuccessionTarget(p, def);
+  const { id: to, isBranchPoint } = parseSuccessionTarget(p, def);
   if (p.at(';')) p.advance();
-  if (to && from !== undefined) {
+  if (!to) return { id: undefined, isBranchPoint: false };
+  // Only the *edge* needs a known `from` to be worth recording — the
+  // resolved node itself (e.g. a `decide` with nothing recorded before it,
+  // the first statement in a body) is still real and still worth tracking
+  // as the next reference point, so callers don't lose it.
+  if (from !== undefined) {
     def.successions.push({ from, to, guard });
-    return to;
   }
-  return undefined;
+  return { id: to, isBranchPoint };
+}
+
+/**
+ * `loop [action] name { ... } [until cond];` — the loop's own body is
+ * skipped structurally (one level deep, same as a nested action's), but it
+ * still becomes its own flowchart node (labeled "loop <name>"). `until`'s
+ * condition is kept on the node but not yet surfaced visually — see
+ * README "Known limitations".
+ */
+function parseLoopAction(p: ParserState): ActionUsageNode {
+  p.expect('loop');
+  if (p.at('action')) p.advance();
+  const name = p.atIdent() ? p.advance().value : '(loop)';
+  if (p.at('{')) skipBalancedBraceBlock(p);
+  let until: string | undefined;
+  if (p.at('until')) {
+    p.advance();
+    until = parseRawUntil(p, [';']);
+  }
+  if (p.at(';')) p.advance();
+  return { name, isLoop: true, until };
 }
 
 /**
  * Shared member loop for both `action def Name { ... }` and a bare
  * `action name { ... }` usage. Tracks `lastActionName` — the most recently
- * declared or succeeded action — so a bare `then B;`/`if guard then B;`
- * (no explicit `first`) resolves its implicit predecessor the way the OMG's
- * own training corpus idiomatically writes successions. `lastActionName`
- * is deliberately cleared (not left dangling) whenever the chain runs
- * through something this round doesn't model (`done`, a control node, or
- * an inline `if guard { ... }` branch) — see `ActionDefNode`'s doc comment
- * on why a broken link is drawn as broken, not silently bridged over.
+ * declared or succeeded action/control node — so a bare `then B;`/
+ * `if guard then B;` (no explicit `first`) resolves its implicit
+ * predecessor the way the OMG's own training corpus idiomatically writes
+ * successions. `lastIsBranchPoint` keeps that predecessor "pinned" at a
+ * `decide`/`fork` across consecutive sibling-branch statements, rather than
+ * advancing to the first branch's own target (which would wrongly chain
+ * the branches to each other instead of fanning out from the same node) —
+ * confirmed necessary against the OMG's own `Decision Example.sysml` and
+ * `Fork Join Example.sysml`. `lastActionName` is cleared (not left
+ * dangling) whenever the chain runs through something still unmodeled
+ * (`done`, or an inline `if guard { ... }` branch).
  */
 function parseActionBody(p: ParserState, def: ActionDefNode): void {
   p.expect('{');
   let lastActionName: string | undefined;
+  let lastIsBranchPoint = false;
   for (;;) {
     const doc = skipDocAndComments(p);
     if (doc && !def.doc) def.doc = doc;
@@ -1201,12 +1243,29 @@ function parseActionBody(p: ParserState, def: ActionDefNode): void {
       def.actions.push(usage);
       if (lastActionName) def.successions.push({ from: lastActionName, to: usage.name });
       lastActionName = usage.name;
+      lastIsBranchPoint = false;
       continue;
     }
     if (p.at('action') && p.peek(1).value !== 'def') {
       const usage = parseActionUsage(p);
       def.actions.push(usage);
       lastActionName = usage.name;
+      lastIsBranchPoint = false;
+      continue;
+    }
+    if (p.at('loop')) {
+      const usage = parseLoopAction(p);
+      def.actions.push(usage);
+      lastActionName = usage.name;
+      lastIsBranchPoint = false;
+      continue;
+    }
+    if (p.at('join')) {
+      p.advance();
+      const name = p.atIdent() ? p.advance().value : undefined;
+      lastActionName = registerControlNode(def, 'join', name);
+      lastIsBranchPoint = false;
+      if (p.at(';')) p.advance();
       continue;
     }
     if (p.at('first')) {
@@ -1220,9 +1279,12 @@ function parseActionBody(p: ParserState, def: ActionDefNode): void {
         guard = parseGuardExpression(p);
       }
       if (p.at('then') || p.at('{')) {
-        lastActionName = parseSuccessionThenTarget(p, def, fromId, guard);
+        const result = parseSuccessionThenTarget(p, def, fromId, guard);
+        lastActionName = result.id;
+        lastIsBranchPoint = result.isBranchPoint;
       } else {
         lastActionName = fromId;
+        lastIsBranchPoint = false;
         if (p.at(';')) p.advance();
       }
       continue;
@@ -1234,13 +1296,21 @@ function parseActionBody(p: ParserState, def: ActionDefNode): void {
         p.advance();
         guard = parseGuardExpression(p);
       }
-      lastActionName = parseSuccessionThenTarget(p, def, lastActionName, guard);
+      const result = parseSuccessionThenTarget(p, def, lastActionName, guard);
+      if (!lastIsBranchPoint) {
+        lastActionName = result.id;
+        lastIsBranchPoint = result.isBranchPoint;
+      }
       continue;
     }
     if (p.at('if')) {
       p.advance();
       const guard = parseGuardExpression(p);
-      lastActionName = parseSuccessionThenTarget(p, def, lastActionName, guard);
+      const result = parseSuccessionThenTarget(p, def, lastActionName, guard);
+      if (!lastIsBranchPoint) {
+        lastActionName = result.id;
+        lastIsBranchPoint = result.isBranchPoint;
+      }
       continue;
     }
     if (p.at('succession') && p.peek(1).value === 'flow') {
@@ -1253,10 +1323,9 @@ function parseActionBody(p: ParserState, def: ActionDefNode): void {
       def.flows.push(parseConnectorLike(p));
       continue;
     }
-    // `bind` (data binding) and the `decide`/`merge`/`fork`/`join`/`loop`
-    // control-node vocabulary as standalone statements (not following a
-    // `then`/`if`) are out of scope for this round — see `ActionDefNode`'s
-    // doc comment. Skipped resiliently like any other unsupported member.
+    // `bind` (data binding) as a standalone statement is out of scope for
+    // this round — see `ActionDefNode`'s doc comment. Skipped resiliently
+    // like any other unsupported member.
     skipUnknownMember(p);
   }
 }
@@ -1278,6 +1347,7 @@ function parseActionDef(p: ParserState): ActionDefNode {
     actions: [],
     successions: [],
     flows: [],
+    controlNodes: [],
   };
   if (p.at('{')) {
     parseActionBody(p, def);
@@ -1312,6 +1382,7 @@ function parseTopLevelActionUsage(p: ParserState): ActionDefNode | undefined {
     actions: [],
     successions: [],
     flows: [],
+    controlNodes: [],
   };
   parseActionBody(p, def);
   return def;

@@ -274,11 +274,29 @@ export interface ActionParamNode {
  * A nested `action name [: Type] { ... }` usage inside an action's body —
  * drawn as one flowchart node, not expanded recursively (this subset's
  * activity support is one level deep, same convention as the connector
- * container — see README).
+ * container — see README). `isLoop`/`until` cover a
+ * `loop action name { ... } until cond;` statement instead — its own body
+ * is skipped structurally (same one-level-deep reasoning), but it still
+ * gets a flowchart node of its own, labeled to show it's a loop.
  */
 export interface ActionUsageNode {
   name: string;
   type?: string;
+  isLoop?: boolean;
+  until?: string;
+}
+
+/**
+ * A `decide`/`merge`/`fork`/`join` control node — a decision/merge diamond
+ * or a fork/join bar in the flowchart. `id` is the name given in the
+ * source (`then merge continueCharging;`, `join joinNode;`) or a
+ * synthesized one for the unnamed forms (`then decide;`, `then fork;`),
+ * confirmed against the OMG's own `Decision Example.sysml`/
+ * `Fork Join Example.sysml`.
+ */
+export interface ControlNodeUsage {
+  id: string;
+  kind: 'decide' | 'merge' | 'fork' | 'join';
 }
 
 /**
@@ -303,12 +321,12 @@ export interface SuccessionNode {
  * Definitions"` through `"22. Opaque Actions"`) — see README for exactly
  * what's covered.
  *
- * Deliberately out of scope for this round: `bind` (data binding, parsed
- * and discarded — not drawn), and the `decide`/`merge`/`fork`/`join`/`loop`
- * control-node vocabulary — a succession running through one of those is
- * simply not recorded (the chain breaks there), rather than misrepresented.
- * Those need actual decision/merge diamonds and fork/join bars, which is
- * real follow-up work (see README's "Extending this").
+ * Round 1 covered plain/guarded succession, start/done, and data flow;
+ * `decide`/`merge`/`fork`/`join` (round 2) are full flowchart nodes now —
+ * see `ControlNodeUsage`. Still deliberately out of scope: `bind` (data
+ * binding, parsed and discarded — not drawn) and `loop`'s own body (parsed
+ * only far enough to skip it structurally, one level deep, same as a
+ * nested action's).
  */
 export interface ActionDefNode {
   kind: 'actionDef';
@@ -323,6 +341,8 @@ export interface ActionDefNode {
   successions: SuccessionNode[];
   /** `flow [name] from a.b to c.d;` between two nested actions' items — reuses `ConnectorNode` since the grammar and "binary, resolves via dotted path" shape are identical to a part's connectors. */
   flows: ConnectorNode[];
+  /** `decide`/`merge`/`fork`/`join` nodes encountered in this action's body. */
+  controlNodes: ControlNodeUsage[];
   /** Seen a `first start;` statement — draws a filled start node. */
   hasStart?: boolean;
   /** Seen a `then done;` (or `first ... then done;`) statement — draws a bordered "final" node. */

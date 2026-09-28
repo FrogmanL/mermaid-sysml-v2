@@ -576,7 +576,7 @@ action def Focus { in scene : Scene; out image : Image; }`);
     expect(node.querySelectorAll('circle.action-start').length).toBe(0);
   });
 
-  it('renders the real Decision Example idioms without throwing, drawing only the recorded edge', () => {
+  it('renders the real Decision Example end to end: merge/decide as diamonds, every succession drawn', () => {
     db.parse(`sysml-v2
 package 'Decision Example' {
   action def MonitorBattery { out charge : Real; }
@@ -600,11 +600,71 @@ package 'Decision Example' {
     expect(() => draw('', 'sysml-test-36', '0.0.0')).not.toThrow();
     const node = findNodeByTitle(document.querySelector('#sysml-test-36')!, 'ChargeBattery');
     expect(node.querySelectorAll('circle.action-start').length).toBe(1);
-    // addCharge -> continueCharging (see the parser test) never resolves to
-    // a drawn arrow: continueCharging is just a name given to the unmodeled
-    // merge node, not a real drawn node — gracefully missing, not throwing.
-    // endCharging -> __done__ DOES resolve (done is a real drawn node), so
-    // exactly one succession arrow is expected here.
-    expect(node.querySelectorAll('line.succession-line').length).toBe(1);
+    expect(node.querySelectorAll('circle.action-done-outer').length).toBe(1);
+    // Two diamonds: the merge and the decide.
+    expect(node.querySelectorAll('polygon.action-decision').length).toBe(2);
+    // All 7 real successions now draw, including the merge's loop-back edge
+    // and both of decide's guarded branches.
+    expect(node.querySelectorAll('line.succession-line').length).toBe(7);
+    expect(node.querySelector('text.succession-label')?.textContent).toMatch(/^\[monitor\.batteryCharge/);
+  });
+
+  it('renders the real Fork Join Example end to end: fork/join as bars, all branches and the join drawn', () => {
+    db.parse(`sysml-v2
+action def MonitorBrakePedal { out pressure : BrakePressure; }
+action def MonitorTraction { out modFreq : Real; }
+action def Braking { in brakePressure : BrakePressure; in modulationFrequency : Real; }
+
+action def Brake {
+  action turnOn : TurnOn;
+  then fork;
+    then monitorBrakePedal;
+    then monitorTraction;
+    then braking;
+
+  action monitorBrakePedal : MonitorBrakePedal { out brakePressure; }
+  then joinNode;
+
+  action monitorTraction : MonitorTraction { out modulationFrequency; }
+  then joinNode;
+
+  flow from monitorBrakePedal.brakePressure to braking.brakePressure;
+  flow from monitorTraction.modulationFrequency to braking.modulationFrequency;
+
+  action braking : Braking { in brakePressure; in modulationFrequency; }
+  then joinNode;
+
+  join joinNode;
+  then done;
+}`);
+    select(document.body).append('svg').attr('id', 'sysml-test-37');
+    expect(() => draw('', 'sysml-test-37', '0.0.0')).not.toThrow();
+    const node = findNodeByTitle(document.querySelector('#sysml-test-37')!, 'Brake');
+    // Two bars: the fork and the join.
+    expect(node.querySelectorAll('rect.action-fork-join').length).toBe(2);
+    // turnOn->fork, fork->{3 branches}, {3 actions}->join, join->done = 8.
+    expect(node.querySelectorAll('line.succession-line').length).toBe(8);
+    expect(node.querySelectorAll('line.dependency-line').length).toBe(2);
+  });
+
+  it('renders a loop action as its own labeled node, one level deep', () => {
+    db.parse(`sysml-v2
+action def MonitorBattery { out charge : Real; }
+action def EndCharging;
+
+action def ChargeBattery {
+  loop action charging {
+    action monitor : MonitorBattery { out charge; }
+  } until charging.monitor.charge >= 100;
+  then action endCharging : EndCharging;
+  then done;
+}`);
+    select(document.body).append('svg').attr('id', 'sysml-test-38');
+    draw('', 'sysml-test-38', '0.0.0');
+
+    const node = findNodeByTitle(document.querySelector('#sysml-test-38')!, 'ChargeBattery');
+    const labels = Array.from(node.querySelectorAll('.member')).map((el) => el.textContent);
+    expect(labels).toContain('loop charging');
+    expect(node.querySelectorAll('line.succession-line').length).toBe(2);
   });
 });

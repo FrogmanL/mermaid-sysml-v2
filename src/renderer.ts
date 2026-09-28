@@ -1034,6 +1034,9 @@ const ACTION_DONE_OUTER_R = ACTION_TERMINAL_R + 3;
 const ACTION_DONE_INNER_R = 4;
 const ACTION_SUCC_ARROW_LEN = 8;
 const ACTION_SUCC_ARROW_WIDTH = 7;
+const ACTION_DIAMOND_SIZE = 22;
+const ACTION_BAR_WIDTH = 50;
+const ACTION_BAR_HEIGHT = 8;
 
 function actionStereotypeAndName(def: ActionDefNode): { stereotype: string; displayName: string } {
   if (def.isUsage) {
@@ -1043,12 +1046,13 @@ function actionStereotypeAndName(def: ActionDefNode): { stereotype: string; disp
 }
 
 function actionUsageLabel(a: ActionUsageNode): string {
+  if (a.isLoop) return `loop ${a.name}`;
   return a.type ? `${a.name} : ${a.type}` : a.name;
 }
 
 interface ActionFlowNode {
   id: string;
-  kind: 'start' | 'done' | 'action';
+  kind: 'start' | 'done' | 'action' | 'decide' | 'merge' | 'fork' | 'join';
   label?: string;
   width: number;
   height: number;
@@ -1063,6 +1067,13 @@ function buildActionFlowNodes(def: ActionDefNode): ActionFlowNode[] {
     const label = actionUsageLabel(a);
     const width = Math.max(ACTION_NODE_MIN_WIDTH, estimateTextWidth(label, 11, true) + ACTION_NODE_PAD * 2);
     nodes.push({ id: a.name, kind: 'action', label, width, height: ACTION_NODE_HEIGHT });
+  }
+  for (const c of def.controlNodes) {
+    if (c.kind === 'decide' || c.kind === 'merge') {
+      nodes.push({ id: c.id, kind: c.kind, width: ACTION_DIAMOND_SIZE, height: ACTION_DIAMOND_SIZE });
+    } else {
+      nodes.push({ id: c.id, kind: c.kind, width: ACTION_BAR_WIDTH, height: ACTION_BAR_HEIGHT });
+    }
   }
   if (def.hasDone) {
     nodes.push({ id: '__done__', kind: 'done', width: ACTION_DONE_OUTER_R * 2, height: ACTION_DONE_OUTER_R * 2 });
@@ -1153,6 +1164,26 @@ function drawActionNode(node: G, n: PositionedActionNode): void {
       .attr('cx', cx)
       .attr('cy', cy)
       .attr('r', ACTION_DONE_INNER_R);
+    return;
+  }
+  if (n.kind === 'decide' || n.kind === 'merge') {
+    node
+      .append('polygon')
+      .attr('class', 'action-decision')
+      .attr(
+        'points',
+        `${cx},${n.y} ${n.x + n.width},${cy} ${cx},${n.y + n.height} ${n.x},${cy}`
+      );
+    return;
+  }
+  if (n.kind === 'fork' || n.kind === 'join') {
+    node
+      .append('rect')
+      .attr('class', 'action-fork-join')
+      .attr('x', n.x)
+      .attr('y', n.y)
+      .attr('width', n.width)
+      .attr('height', n.height);
     return;
   }
   boxRect(node, n.x, n.y, n.width, n.height, true);
@@ -1297,7 +1328,7 @@ function toRenderList(definitions: DefinitionNode[]): RenderEntry[] {
     if (def.kind === 'useCaseDef') {
       return { box: prepareUseCaseBox(def), def };
     }
-    if (def.kind === 'actionDef' && (def.actions.length || def.hasStart || def.hasDone)) {
+    if (def.kind === 'actionDef' && (def.actions.length || def.hasStart || def.hasDone || def.controlNodes.length)) {
       return { box: prepareActionFlowBox(def), def };
     }
     return { box: prepareLeafBox(def), def };
