@@ -3,9 +3,10 @@
 An external [Mermaid](https://mermaid.js.org) diagram plugin that renders a
 subset of the [SysML v2](https://www.omg.org/spec/SysMLv2/) textual notation
 — `part def`, `port def`, `interface def`, `connection def`, `requirement def`,
-every connector-establishing form this subset resolves, specialization
-(`:>`)/subsetting (`:>`)/redefinition (`:>>`), and requirement traceability
-(`satisfy`/`verify`/`trace`/`allocate`, plus requirement derivation) —
+`attribute def`, `enum def`, every connector-establishing form this subset
+resolves, specialization (`:>`)/subsetting (`:>`)/redefinition (`:>>`), and
+requirement traceability (`satisfy`/`verify`/`trace`/`allocate`, plus
+requirement derivation) —
 matching the OMG's own graphical notation as closely as this subset's scope
 allows: compartmented definition boxes, rounded usage boxes, a recursive
 composition tree for plain containment, an internal-block-diagram-style
@@ -103,6 +104,17 @@ covers:
   `interface def` but for a plain part-to-part link with no port-compatibility
   requirement; renders the same way (a leaf box with "attributes"/"ends"
   compartments).
+- `attribute def Name [:> Super] { attribute field ...; }` — a standalone
+  value-type definition (e.g. a struct-like record type), a leaf box
+  stereotyped «attribute def» with an "attributes" compartment. Confirmed
+  against `examples/bvm.mmd`'s own `attribute def Product { ... }`, which was
+  already referenced by name from things this subset rendered before this
+  kind existed (`part inventory : Product[8];`, `attribute selectedProduct :
+  Product;`) — those references now point at an actual box.
+- `enum def Name [:> Super] { enum literal; ... }` — an enumeration, a leaf
+  box stereotyped «enum def» with a "values" compartment listing each
+  literal. Confirmed against `examples/bvm.mmd`'s own
+  `enum def DispenseResult { enum success; enum failure; }`.
 - **Requirements & traceability** — a subset of the spec's separate
   **Requirement Diagram** notation:
   - `requirement def Name [:> Super] { doc ...; subject name [: Type]; }` —
@@ -194,7 +206,8 @@ during development, not vendored into this repo except where noted) from:
   the user actually produced, not because it's a citable outside source. Its
   own `BVMRequirements` package (REQ-001 through REQ-013) is also what drove
   this subset's requirements/traceability support — including the discovery
-  that `deriveReqt` isn't a real keyword.
+  that `deriveReqt` isn't a real keyword — and its `attribute def Product`/
+  `enum def DispenseResult` drove `attribute def`/`enum def` support.
 
 **Known limitations**, in rough order of how often they'd bite:
 
@@ -257,6 +270,11 @@ during development, not vendored into this repo except where noted) from:
   confirmed against a real corpus file the way `satisfy` and requirement
   derivation are (both evidenced in `examples/bvm.mmd`) — flag it if real
   usage doesn't match.
+- **`attribute def`/`enum def` are only recognized at the top/package
+  level**, same as every other `X def` kind here — one nested inside a
+  `part def`'s body is skipped structurally rather than rendered as its own
+  box (see `parsePartBody` in `src/parser/parser.ts`). Not seen nested in
+  the corpus so far, but worth knowing if a real model does this.
 
 ## Usage
 
@@ -298,15 +316,16 @@ See `examples/vehicle.mmd` for the part/port/interface-def style (the example
 from the GitHub issue) and `examples/bvm.mmd` for the containment/connector
 style (a real beverage-vending-machine model — its `BVM` part shows the
 connector container, its `ControlUnit` part shows the composition tree, since
-it has containment but no connectors of its own, and its `BVMRequirements`
+it has containment but no connectors of its own, its `BVMRequirements`
 package for requirements/traceability, though none of its `satisfy`
-statements draw an arrow — see "Known limitations"). `examples/features/`
-has one small file per feature cluster (definition/usage styling, the
+statements draw an arrow — see "Known limitations" — and its `Product`/
+`DispenseResult` for `attribute def`/`enum def`). `examples/features/` has
+one small file per feature cluster (definition/usage styling, the
 composition tree, the connector container, nested packages, resilience
 against unsupported constructs, every connector form, specialization
-arrows/subsets/redefines, and requirements/traceability) for a quick visual
-tour of the whole plugin; `index.html`'s dropdown has a "Feature showcase"
-group listing them all.
+arrows/subsets/redefines, requirements/traceability, and attribute def/enum
+def) for a quick visual tour of the whole plugin; `index.html`'s dropdown has
+a "Feature showcase" group listing them all.
 
 ## Development
 

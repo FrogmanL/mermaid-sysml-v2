@@ -127,6 +127,37 @@ export interface ConnectionDefNode {
   attributes: AttributeNode[];
 }
 
+/**
+ * `attribute def Name [:> Super] { attribute field [: Type] [= value]; ... }`
+ * — a standalone value-type definition, e.g. a struct-like record type.
+ * Confirmed against `examples/bvm.mmd`'s own `attribute def Product { ... }`,
+ * which is referenced by name elsewhere in that same file
+ * (`part inventory : Product[8];`, `attribute selectedProduct : Product;`) —
+ * both already rendered before this kind existed, pointing at a definition
+ * that had no box of its own.
+ */
+export interface AttributeDefNode {
+  kind: 'attributeDef';
+  name: string;
+  superType?: string;
+  doc?: string;
+  attributes: AttributeNode[];
+}
+
+/**
+ * `enum def Name [:> Super] { enum literal; ... }` — an enumeration.
+ * Confirmed against `examples/bvm.mmd`'s own
+ * `enum def DispenseResult { enum success; enum failure; }`, referenced by
+ * `DispensePort`'s `in item dispenseResult : DispenseResult;`.
+ */
+export interface EnumDefNode {
+  kind: 'enumDef';
+  name: string;
+  superType?: string;
+  doc?: string;
+  values: string[];
+}
+
 export interface RequirementSubjectNode {
   name: string;
   type?: string;
@@ -181,7 +212,9 @@ export type DefinitionNode =
   | PortDefNode
   | InterfaceDefNode
   | ConnectionDefNode
-  | RequirementDefNode;
+  | RequirementDefNode
+  | AttributeDefNode
+  | EnumDefNode;
 
 export interface SysmlModel {
   packageName?: string;

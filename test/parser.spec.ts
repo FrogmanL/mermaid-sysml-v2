@@ -124,16 +124,18 @@ action providePower {
   });
 
   // Regression: skipUnknownMember used to keep consuming tokens after closing
-  // its own brace on a construct like `attribute def X { ... }`, since only a
-  // top-level `;` or an unmatched `}` told it to stop — so it swallowed every
-  // sibling member up to the next unrelated `}`. Caught against the real BVM
-  // model, where this silently ate three `port def`s hiding behind one
-  // preceding `attribute def`.
+  // its own brace on a construct like `attribute def X { ... }` (unsupported
+  // at the time), since only a top-level `;` or an unmatched `}` told it to
+  // stop — so it swallowed every sibling member up to the next unrelated
+  // `}`. Caught against the real BVM model, where this silently ate three
+  // `port def`s hiding behind one preceding `attribute def`. `attribute def`
+  // itself is supported now (see below), so this uses `action def` — still
+  // genuinely out of scope — to keep exercising the same skip-recovery path.
   it('stops skipping right after a braced-but-unsupported construct closes, not at the next unrelated brace', () => {
     const model = parseSysml(`sysml-v2
 package X {
-  attribute def Product {
-    attribute id : String;
+  action def DoSomething {
+    action step1;
   }
   port def CoinPort {
     out item coin : Real;
@@ -569,5 +571,81 @@ allocate softwareModule to controlUnit;`);
 
     expect(model.traceability).toHaveLength(13);
     expect(model.traceability[0]).toEqual({ kind: 'satisfy', source: 'req001', target: 'bvm.coinAcceptor' });
+  });
+
+  it('parses an attribute def with its own attribute members', () => {
+    const model = parseSysml(`sysml-v2
+attribute def Product {
+  attribute id : String;
+  attribute price : Real;
+  attribute quantity : Integer;
+}`);
+    const def = model.definitions[0];
+    if (def?.kind !== 'attributeDef') throw new Error('expected attributeDef');
+    expect(def.name).toBe('Product');
+    expect(def.attributes).toEqual([
+      { name: 'id', type: 'String', value: undefined },
+      { name: 'price', type: 'Real', value: undefined },
+      { name: 'quantity', type: 'Integer', value: undefined },
+    ]);
+  });
+
+  it('parses an enum def with its enumerated values', () => {
+    const model = parseSysml(`sysml-v2
+enum def DispenseResult {
+  enum success;
+  enum failure;
+}`);
+    const def = model.definitions[0];
+    if (def?.kind !== 'enumDef') throw new Error('expected enumDef');
+    expect(def.name).toBe('DispenseResult');
+    expect(def.values).toEqual(['success', 'failure']);
+  });
+
+  it('parses attribute def / enum def specialization (:>) the same way as other definition kinds', () => {
+    const model = parseSysml(`sysml-v2
+attribute def Base;
+attribute def Derived :> Base;
+enum def BaseEnum;
+enum def DerivedEnum :> BaseEnum;`);
+    const derived = model.definitions.find((d) => d.name === 'Derived');
+    const derivedEnum = model.definitions.find((d) => d.name === 'DerivedEnum');
+    if (derived?.kind !== 'attributeDef') throw new Error('expected attributeDef');
+    if (derivedEnum?.kind !== 'enumDef') throw new Error('expected enumDef');
+    expect(derived.superType).toBe('Base');
+    expect(derivedEnum.superType).toBe('BaseEnum');
+  });
+
+  // Regression: `attribute`'s member check inside a part body had no `def`
+  // guard (unlike `port`/`part`/`connection`, which all check
+  // `p.peek(1).value !== 'def'`) — so a nested `attribute def` would have
+  // been misread as a plain attribute literally named "def", corrupting the
+  // rest of the body. Fixed alongside adding top-level `attribute def`
+  // support, since both now sit in the same neighborhood of the parser.
+  it('does not corrupt a part body when an (unsupported, nested) attribute def appears inside it', () => {
+    const model = parseSysml(`sysml-v2
+part def Vehicle {
+  attribute def Nested {
+    attribute x : Real;
+  }
+  attribute mass : Real;
+}`);
+    const vehicle = model.definitions.find((d) => d.name === 'Vehicle');
+    if (vehicle?.kind !== 'partDef') throw new Error('expected partDef');
+    expect(vehicle.attributes).toEqual([{ name: 'mass', type: 'Real', value: undefined }]);
+  });
+
+  it('parses the real BVM Product/DispenseResult defs, referenced elsewhere in the same file', () => {
+    const model = parseSysml(bvmSource);
+    const product = model.definitions.find((d) => d.name === 'Product');
+    const dispenseResult = model.definitions.find((d) => d.name === 'DispenseResult');
+    if (product?.kind !== 'attributeDef') throw new Error('expected attributeDef');
+    if (dispenseResult?.kind !== 'enumDef') throw new Error('expected enumDef');
+    expect(product.attributes.map((a) => a.name)).toEqual(['id', 'price', 'quantity']);
+    expect(dispenseResult.values).toEqual(['success', 'failure']);
+
+    const controlUnit = model.definitions.find((d) => d.name === 'ControlUnit');
+    if (controlUnit?.kind !== 'partDef') throw new Error('expected partDef');
+    expect(controlUnit.parts.find((p) => p.name === 'inventory')?.type).toBe('Product');
   });
 });

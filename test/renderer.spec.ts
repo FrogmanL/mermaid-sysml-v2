@@ -403,4 +403,56 @@ requirement req004 : ProductDispensingReq :> req012;`);
     const req001Node = findNodeByTitle(document.querySelector('#sysml-test-23')!, 'req001 : CoinPaymentReq');
     expect(req001Node.querySelector(':scope > .stereotype')?.textContent).toBe('«requirement»');
   });
+
+  it('renders an attribute def as a leaf box with an attributes compartment', () => {
+    db.parse(`sysml-v2
+attribute def Product {
+  attribute id : String;
+  attribute price : Real;
+}`);
+    select(document.body).append('svg').attr('id', 'sysml-test-24');
+    draw('', 'sysml-test-24', '0.0.0');
+
+    const node = findNodeByTitle(document.querySelector('#sysml-test-24')!, 'Product');
+    expect(node.querySelector(':scope > .stereotype')?.textContent).toBe('«attribute def»');
+    const lines = Array.from(node.querySelectorAll('.member')).map((el) => el.textContent);
+    expect(lines).toEqual(expect.arrayContaining(['id : String', 'price : Real']));
+  });
+
+  it('renders an enum def as a leaf box with a values compartment', () => {
+    db.parse(`sysml-v2
+enum def DispenseResult {
+  enum success;
+  enum failure;
+}`);
+    select(document.body).append('svg').attr('id', 'sysml-test-25');
+    draw('', 'sysml-test-25', '0.0.0');
+
+    const node = findNodeByTitle(document.querySelector('#sysml-test-25')!, 'DispenseResult');
+    expect(node.querySelector(':scope > .stereotype')?.textContent).toBe('«enum def»');
+    const lines = Array.from(node.querySelectorAll('.member')).map((el) => el.textContent);
+    expect(lines).toEqual(['success', 'failure']);
+  });
+
+  it('draws a specialization arrow between two attribute defs / enum defs, same as any other definition kind', () => {
+    db.parse(`sysml-v2
+attribute def Base;
+attribute def Derived :> Base;`);
+    select(document.body).append('svg').attr('id', 'sysml-test-26');
+    draw('', 'sysml-test-26', '0.0.0');
+
+    const svgEl = document.querySelector('#sysml-test-26')!;
+    expect(svgEl.querySelectorAll('polygon.specialization-arrow').length).toBe(1);
+  });
+
+  it('renders the real BVM Product/DispenseResult defs without throwing, now with their own boxes', () => {
+    db.parse(bvmSource);
+    select(document.body).append('svg').attr('id', 'sysml-test-27');
+
+    expect(() => draw('', 'sysml-test-27', '0.0.0')).not.toThrow();
+    const productNode = findNodeByTitle(document.querySelector('#sysml-test-27')!, 'Product');
+    expect(productNode.querySelector(':scope > .stereotype')?.textContent).toBe('«attribute def»');
+    const dispenseResultNode = findNodeByTitle(document.querySelector('#sysml-test-27')!, 'DispenseResult');
+    expect(dispenseResultNode.querySelector(':scope > .stereotype')?.textContent).toBe('«enum def»');
+  });
 });

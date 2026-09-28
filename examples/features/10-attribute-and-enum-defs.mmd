@@ -1,0 +1,35 @@
+sysml-v2
+// Feature: `attribute def` (a standalone value-type/struct definition) and
+// `enum def` (an enumeration) — both confirmed against examples/bvm.mmd,
+// where `Product` and `DispenseResult` are referenced by name from parts
+// that already rendered before these definition kinds existed:
+// `ControlUnit.inventory : Product[8]` and `DispensePort.dispenseResult :
+// DispenseResult`. Neither had a box of its own until now.
+//
+// PhysicalItem/InventoryItem show that specialization (`:>`) works the same
+// way here as on any other definition kind — a hollow-triangle arrow from
+// InventoryItem to PhysicalItem.
+package AttributeAndEnumDefs {
+  attribute def PhysicalItem {
+    attribute mass : Real;
+  }
+  attribute def InventoryItem :> PhysicalItem {
+    attribute id : String;
+    attribute price : Real;
+    attribute quantity : Integer;
+  }
+
+  enum def DispenseResult {
+    enum success;
+    enum failure;
+  }
+
+  part def ProductDispenser {
+    attribute selectedProduct : InventoryItem;
+    port dispenseOut : DispensePort;
+  }
+  port def DispensePort {
+    out item productId : String;
+    in item dispenseResult : DispenseResult;
+  }
+}

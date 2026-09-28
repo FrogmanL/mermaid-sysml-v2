@@ -1,9 +1,11 @@
 import { tokenize, type Token } from './lexer.js';
 import type {
+  AttributeDefNode,
   AttributeNode,
   ConnectionDefNode,
   ConnectorNode,
   DefinitionNode,
+  EnumDefNode,
   InterfaceDefNode,
   InterfaceEndNode,
   PartDefNode,
@@ -447,7 +449,7 @@ function parsePartBody(p: ParserState, def: PartDefNode): void {
       break;
     }
     if (p.eof()) break;
-    if (p.at('attribute')) {
+    if (p.at('attribute') && p.peek(1).value !== 'def') {
       def.attributes.push(parseAttribute(p));
       continue;
     }
@@ -468,7 +470,9 @@ function parsePartBody(p: ParserState, def: PartDefNode): void {
       parseConnectionUsage(p, def.connectors);
       continue;
     }
-    // Nested defs, actions, states, requirements, satisfy, etc. are outside
+    // Nested defs (including `attribute def`/`enum def` — this subset only
+    // recognizes those at the top/package level, matching every other def
+    // kind here), actions, states, requirements, satisfy, etc. are outside
     // this subset — skip resiliently rather than fail the whole diagram.
     skipUnknownMember(p);
   }
@@ -678,8 +682,89 @@ function parseConnectionDef(p: ParserState): ConnectionDefNode {
         def.ends.push(parseConnectionEnd(p));
         continue;
       }
-      if (p.at('attribute')) {
+      if (p.at('attribute') && p.peek(1).value !== 'def') {
         def.attributes.push(parseAttribute(p));
+        continue;
+      }
+      skipUnknownMember(p);
+    }
+  } else if (p.at(';')) {
+    p.advance();
+  }
+  return def;
+}
+
+/**
+ * `attribute def Name [:> Super] { attribute field [: Type] [= value]; ... }`
+ * — a standalone value-type definition (see `AttributeDefNode`'s doc
+ * comment for corpus evidence).
+ */
+function parseAttributeDef(p: ParserState): AttributeDefNode {
+  p.expect('attribute');
+  p.expect('def');
+  const name = p.advance().value;
+  let superType: string | undefined;
+  if (p.at(':>') || p.at(':')) {
+    p.advance();
+    superType = parseQualifiedName(p);
+  }
+  const def: AttributeDefNode = { kind: 'attributeDef', name, superType, attributes: [] };
+  if (p.at('{')) {
+    p.advance();
+    for (;;) {
+      const doc = skipDocAndComments(p);
+      if (doc && !def.doc) def.doc = doc;
+      if (p.at('}')) {
+        p.advance();
+        break;
+      }
+      if (p.eof()) break;
+      if (p.at('attribute') && p.peek(1).value !== 'def') {
+        def.attributes.push(parseAttribute(p));
+        continue;
+      }
+      skipUnknownMember(p);
+    }
+  } else if (p.at(';')) {
+    p.advance();
+  }
+  return def;
+}
+
+/** `enum literalName;` inside an `enum def` body — one enumerated value. */
+function parseEnumValue(p: ParserState): string {
+  p.expect('enum');
+  const name = p.advance().value;
+  if (p.at(';')) p.advance();
+  return name;
+}
+
+/**
+ * `enum def Name [:> Super] { enum literal; ... }` — an enumeration (see
+ * `EnumDefNode`'s doc comment for corpus evidence).
+ */
+function parseEnumDef(p: ParserState): EnumDefNode {
+  p.expect('enum');
+  p.expect('def');
+  const name = p.advance().value;
+  let superType: string | undefined;
+  if (p.at(':>') || p.at(':')) {
+    p.advance();
+    superType = parseQualifiedName(p);
+  }
+  const def: EnumDefNode = { kind: 'enumDef', name, superType, values: [] };
+  if (p.at('{')) {
+    p.advance();
+    for (;;) {
+      const doc = skipDocAndComments(p);
+      if (doc && !def.doc) def.doc = doc;
+      if (p.at('}')) {
+        p.advance();
+        break;
+      }
+      if (p.eof()) break;
+      if (p.at('enum')) {
+        def.values.push(parseEnumValue(p));
         continue;
       }
       skipUnknownMember(p);
@@ -842,6 +927,14 @@ function parseMembers(
     }
     if (p.at('connection') && p.peek(1).value === 'def') {
       definitions.push(parseConnectionDef(p));
+      continue;
+    }
+    if (p.at('attribute') && p.peek(1).value === 'def') {
+      definitions.push(parseAttributeDef(p));
+      continue;
+    }
+    if (p.at('enum') && p.peek(1).value === 'def') {
+      definitions.push(parseEnumDef(p));
       continue;
     }
     if (p.at('part') && p.peek(1).value !== 'def') {

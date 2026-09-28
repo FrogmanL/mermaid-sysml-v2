@@ -201,23 +201,43 @@ function toLeafBox(def: DefinitionNode): LeafBox {
     }
     return { stereotype: 'connection def', name: def.name, rounded: false, doc: def.doc, compartments };
   }
-  // requirementDef — the derivation relationship (`:>`) is drawn as an arrow
-  // (see `drawTraceabilityArrows`), not shown as text here, matching how
-  // definition-level specialization is treated elsewhere in this renderer.
-  const compartments: RenderCompartment[] = [];
-  if (def.subject) {
-    compartments.push({
-      label: 'subject',
-      lines: [`${def.subject.name}${typeSuffix(def.subject.type, undefined)}`],
-    });
+  if (def.kind === 'requirementDef') {
+    // The derivation relationship (`:>`) is drawn as an arrow (see
+    // `drawTraceabilityArrows`), not shown as text here, matching how
+    // definition-level specialization is treated elsewhere in this renderer.
+    const compartments: RenderCompartment[] = [];
+    if (def.subject) {
+      compartments.push({
+        label: 'subject',
+        lines: [`${def.subject.name}${typeSuffix(def.subject.type, undefined)}`],
+      });
+    }
+    return {
+      stereotype: def.isUsage ? 'requirement' : 'requirement def',
+      name: def.isUsage ? `${def.name}${typeSuffix(def.usageType, undefined)}` : def.name,
+      rounded: !!def.isUsage,
+      doc: def.doc,
+      compartments,
+    };
   }
-  return {
-    stereotype: def.isUsage ? 'requirement' : 'requirement def',
-    name: def.isUsage ? `${def.name}${typeSuffix(def.usageType, undefined)}` : def.name,
-    rounded: !!def.isUsage,
-    doc: def.doc,
-    compartments,
-  };
+  if (def.kind === 'attributeDef') {
+    const compartments: RenderCompartment[] = [];
+    if (def.attributes.length) {
+      compartments.push({
+        label: 'attributes',
+        lines: def.attributes.map((a) =>
+          a.value !== undefined ? `${a.name} = ${a.value}` : `${a.name}${typeSuffix(a.type, a.typeKind)}`
+        ),
+      });
+    }
+    return { stereotype: 'attribute def', name: def.name, rounded: false, doc: def.doc, compartments };
+  }
+  // enumDef
+  const compartments: RenderCompartment[] = [];
+  if (def.values.length) {
+    compartments.push({ label: 'values', lines: def.values });
+  }
+  return { stereotype: 'enum def', name: def.name, rounded: false, doc: def.doc, compartments };
 }
 
 function measureLeafBox(box: LeafBox): { width: number; height: number } {
