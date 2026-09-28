@@ -2,13 +2,15 @@
 
 An external [Mermaid](https://mermaid.js.org) diagram plugin that renders a
 subset of the [SysML v2](https://www.omg.org/spec/SysMLv2/) textual notation
-— `part def`, `port def`, `interface def`, `connection def`, and every
-connector-establishing form this subset resolves — matching the OMG's own
+— `part def`, `port def`, `interface def`, `connection def`, every
+connector-establishing form this subset resolves, and specialization
+(`:>`)/subsetting (`:>`)/redefinition (`:>>`) — matching the OMG's own
 graphical notation as closely as this subset's scope allows: compartmented
 definition boxes, rounded usage boxes, a recursive composition tree for plain
-containment, and an internal-block-diagram-style container with connector
-lines (binary, `::>`-bound, or n-ary) where a part's containment also has
-connectors.
+containment, an internal-block-diagram-style container with connector lines
+(binary, `::>`-bound, or n-ary) where a part's containment also has
+connectors, and a hollow-triangle generalization arrow between two definition
+boxes that specialize one another.
 
 ## Why this exists
 
@@ -72,6 +74,24 @@ covers:
     ports at all) drawable.
   - A bare top-level `connection` usage (not nested in any part) is parsed
     but has no box to draw against in this subset, so it's discarded.
+- **Specialization, subsetting, and redefinition** — the same `:>`/`:>>`
+  syntax means something different depending on what it's attached to, and
+  this subset keeps the two apart rather than collapsing everything to a
+  plain `:`:
+  - On a **definition** (`part def X :> Y`, `port def X :> Y`,
+    `interface def X :> Y`, `connection def X :> Y`) it's specialization —
+    kept as `superType`, and drawn as a hollow-triangle generalization arrow
+    from X to Y (tip at the supertype), matching the spec's own notation. The
+    arrow only appears when Y is itself a box in the same diagram; a
+    supertype naming something outside it (a standard-library type like
+    `ISQ::PhysicalObject`) is parsed and kept on the node, but has nothing to
+    point at, so no arrow is drawn for it.
+  - On a **usage or attribute** (a part/port/attribute/connection-end
+    reference), `:>`/the `subsets` keyword narrows an inherited feature and
+    `:>>`/the `redefines` keyword overrides one — these display with the
+    actual operator that introduced them (`name :> base`, `name :>> base`)
+    rather than always showing a plain colon, but (unlike definition-level
+    specialization) don't get their own arrow — see "Known limitations".
 - `port def Name { in/out [item|ref] name [:|:>] Type; }`, including a
   conjugated type (`~Type`).
 - `interface def Name { end ...; flow a.b to c.d; }` (flows here stay inside
@@ -91,6 +111,43 @@ interactions, port redefinition, expressions beyond a raw right-hand side —
 is outside this subset. The parser skips unrecognized constructs resiliently
 (structurally, brace-aware) rather than failing the whole diagram, so a real
 file mixing supported and unsupported constructs still renders what it can.
+
+## Requirements & traceability (a separate diagram, not covered here)
+
+SysML v2's requirements/traceability constructs — `requirement def`, a
+`requirement` usage bound to a `subject`, and the cross-cutting relationship
+keywords `satisfy ... by ...`, `verify`, `trace`, `allocate`, and `copy` —
+belong to a different diagram type from the ones above: the **Requirement
+Diagram**, with its own graphical notation (a compartmented requirement box
+showing id/text/subject, and dashed dependency arrows labeled
+«satisfy»/«verify»/«trace»/etc.), not the definition/usage/interconnection
+notation this subset renders. The OMG's own graphical-notation deck (see
+"Validation corpus" below) covers it starting at page 48 — already noted as
+out of scope in "Everything else" above.
+
+This subset already parses past these constructs structurally rather than
+failing, so a real model mixing them with supported constructs still renders
+what it can. `examples/bvm.mmd`'s own `requirement def`/`requirement`/
+`satisfy` section (REQ-001 through REQ-013, modeling the BVM's requirements
+and which parts satisfy them) is a real instance of exactly that — it parses
+cleanly, just contributes nothing to the diagram today. One thing worth
+noting from that file: **`deriveReqt` isn't a standalone keyword in the
+textual grammar.** SysML v2 models requirement derivation as ordinary usage
+subsetting instead —
+`requirement req004 : ProductDispensingReq :> req012;` — the same `:>`
+construct already covered under "Specialization, subsetting, and
+redefinition" above, not a distinct traceability relationship. So a future
+requirement-derivation arrow would reuse the same usage-level subsetting
+relationship this subset already parses today (see "Known limitations" — a
+usage's `:>`/`:>>` is currently shown as text only, with no arrow of its
+own yet).
+
+Adding requirement-diagram support would mean new parsing and rendering work
+of its own — a `requirement def`/`requirement` usage box (id + text +
+subject compartments, per the spec), and a dashed dependency-arrow renderer
+for `satisfy`/`verify`/`trace`/`allocate`/`copy`, each labeled with its own
+guillemet stereotype — rather than an extension of the definition/usage/
+connector/specialization rendering already built here.
 
 ### Validation corpus
 
@@ -158,9 +215,21 @@ during development, not vendored into this repo except where noted) from:
   diamond for composition and a hollow diamond for a non-owning reference
   (see the graphical-notation deck's "References," p. 37); this subset has no
   `ref`-part concept and always draws the filled (composition) diamond.
-- **Specialization (`:>`) has no arrow.** `part def X :> Y` parses correctly
-  and is kept on the node as `superType`, but isn't yet drawn as the spec's
-  hollow-triangle inheritance arrow between two definition boxes.
+- **The specialization arrow uses a straight line clipped to each box's
+  border**, not real edge routing — in a dense grid layout it can visually
+  cross an unrelated box sitting between the two ends (see
+  `examples/features/08-specialization-and-subsetting.mmd`'s AxleMountIF →
+  BaseMountIF arrow). The relationship is still correct; only the line's path
+  can look busy.
+- **Subsetting/redefinition on a usage (`:>`/`:>>`, or `subsets`/`redefines`)
+  has no arrow of its own** — only definition-level specialization does (see
+  "Scope" above). A usage's relation shows correctly as text (`name :> base`,
+  `name :>> base`), but the spec's own dashed subsetting/redefinition arrow
+  between two usages isn't drawn.
+- **At most one type-introducing relation is kept per usage.** A usage
+  combining a defining type with a subsets/redefines target on the same
+  declaration (`part x : Type :> base;`) hasn't turned up in this subset's
+  validation corpus; if it occurs, only the last relation parsed is kept.
 
 ## Usage
 
@@ -205,9 +274,9 @@ connector container, its `ControlUnit` part shows the composition tree, since
 it has containment but no connectors of its own). `examples/features/`
 has one small file per feature cluster (definition/usage styling, the
 composition tree, the connector container, nested packages, resilience
-against unsupported constructs, and every connector form) for a quick visual
-tour of the whole plugin; `index.html`'s dropdown has a "Feature showcase"
-group listing them all.
+against unsupported constructs, every connector form, and specialization
+arrows/subsets/redefines) for a quick visual tour of the whole plugin;
+`index.html`'s dropdown has a "Feature showcase" group listing them all.
 
 ## Development
 
@@ -227,15 +296,18 @@ Natural next steps, roughly in order of value:
    inside an IBD-style container whose own type has further containment and
    connectors currently just shows as a plain box with ports instead of
    expanding.
-2. **Specialization arrow** — draw `part def Foo :> Bar`'s hollow-triangle
-   inheritance arrow between the two definition boxes; the relationship is
-   already parsed and available as `superType`.
-3. **Hollow diamond for a reference (non-owning) containment**, contrasted
+2. **Real edge routing for the specialization arrow**, instead of a straight
+   line clipped to each box's border — would fix the visual crossing noted
+   in "Known limitations" for a dense grid layout.
+3. **A subsetting/redefinition arrow between two usages**, distinct from the
+   definition-level specialization arrow already drawn — the spec shows this
+   as a separate dashed relationship line.
+4. **Hollow diamond for a reference (non-owning) containment**, contrasted
    with the filled diamond already drawn for composition.
-4. **Real text measurement** — the renderer currently estimates box width
+5. **Real text measurement** — the renderer currently estimates box width
    from character counts; swapping in `getBBox()`-based measurement (as
    mermaid's own class diagram does) would tighten box sizing.
-5. Publishing to npm and registering in Mermaid's
+6. Publishing to npm and registering in Mermaid's
    [community integrations list](https://mermaid.js.org/ecosystem/integrations-community.html),
    and linking this project from the GitHub issue, once it's further along.
 

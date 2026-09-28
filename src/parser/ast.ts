@@ -9,10 +9,21 @@
  * This is intentionally not a full SysML v2 grammar (see README for scope).
  */
 
+/**
+ * How a usage's type reference was introduced: `:>` (`subsets` keyword) or
+ * `:>>` (`redefines` keyword) — a feature narrowing or overriding another
+ * inherited one, per KerML. Plain `:` ("typed by") leaves this `undefined`,
+ * since that's the common case and every existing call site already treats
+ * an absent `type` as "no type" — adding a third always-present value here
+ * would have meant touching every one of those sites for no display benefit.
+ */
+export type TypeRelation = ':>' | ':>>';
+
 export interface AttributeNode {
   name: string;
-  /** Type reference after `:` or `:>` (e.g. `ISQ::mass`). */
+  /** Type reference after `:`, `:>`/`subsets`, or `:>>`/`redefines` (e.g. `ISQ::mass`). */
   type?: string;
+  typeKind?: TypeRelation;
   /** Raw expression text after `=` (e.g. `engine.mass+transmission.mass`). */
   value?: string;
 }
@@ -21,12 +32,14 @@ export interface PortRefNode {
   name: string;
   /** Port type name, referencing a `port def`. */
   type?: string;
+  typeKind?: TypeRelation;
 }
 
-/** A nested `part name [: Type] [[multiplicity]];` usage inside a part's body — containment. */
+/** A nested `part name [: | :> | :>> Type] [[multiplicity]];` usage inside a part's body — containment. */
 export interface PartUsageNode {
   name: string;
   type?: string;
+  typeKind?: TypeRelation;
   multiplicity?: string;
 }
 
@@ -55,8 +68,9 @@ export interface PartDefNode {
    * box stereotyped «part def», a usage as «part» with "name : Type".
    */
   isUsage?: boolean;
-  /** Usage only: the type after `:`/`:>` in `part name : Type { ... }`. */
+  /** Usage only: the type after `:`/`:>`/`:>>` in `part name : Type { ... }`. */
   usageType?: string;
+  usageTypeKind?: TypeRelation;
   /** Definition only: the supertype after `:>` (specialization), e.g. `part def FrontAxle :> Axle`. */
   superType?: string;
   doc?: string;
@@ -70,11 +84,14 @@ export interface PortFieldNode {
   direction: 'in' | 'out';
   name: string;
   type?: string;
+  typeKind?: TypeRelation;
 }
 
 export interface PortDefNode {
   kind: 'portDef';
   name: string;
+  /** Supertype after `:>` (specialization), e.g. `port def SubPort :> BasePort`. */
+  superType?: string;
   doc?: string;
   fields: PortFieldNode[];
 }
@@ -82,11 +99,14 @@ export interface PortDefNode {
 export interface InterfaceEndNode {
   name: string;
   type?: string;
+  typeKind?: TypeRelation;
 }
 
 export interface InterfaceDefNode {
   kind: 'interfaceDef';
   name: string;
+  /** Supertype after `:>` (specialization). */
+  superType?: string;
   doc?: string;
   ends: InterfaceEndNode[];
   flows: ConnectorNode[];

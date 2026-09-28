@@ -51,6 +51,15 @@ const getStyles = (options: any): string => `
 .sysml-v2 polygon.tree-diamond {
   fill: ${options.nodeBorder ?? options.primaryBorderColor ?? '#999'};
 }
+.sysml-v2 line.specialization-line {
+  stroke: ${options.nodeBorder ?? options.primaryBorderColor ?? '#999'};
+  stroke-width: 1px;
+}
+.sysml-v2 polygon.specialization-arrow {
+  fill: ${options.mainBkg ?? options.primaryColor ?? '#eee'};
+  stroke: ${options.nodeBorder ?? options.primaryBorderColor ?? '#999'};
+  stroke-width: 1px;
+}
 `;
 
 export default getStyles;

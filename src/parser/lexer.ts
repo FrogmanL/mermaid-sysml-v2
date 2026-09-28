@@ -4,7 +4,7 @@ export interface Token {
   pos: number;
 }
 
-const PUNCT_TRIPLE = ['::>'];
+const PUNCT_TRIPLE = ['::>', ':>>'];
 const PUNCT_MULTI = [':>', '::'];
 const PUNCT_SINGLE = '{}();:,.=*+-[]~';
 

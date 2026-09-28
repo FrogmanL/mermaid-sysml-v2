@@ -12,6 +12,7 @@ import type {
   PortFieldNode,
   PortRefNode,
   SysmlModel,
+  TypeRelation,
 } from './ast.js';
 
 export class SysmlParseError extends Error {}
@@ -135,6 +136,36 @@ function parseFeaturePath(p: ParserState): string {
   return parts.join('.');
 }
 
+/**
+ * Consumes a type-introducing relation if one is present: plain `:` ("typed
+ * by"), `:>`/the `subsets` keyword (a usage narrowing another), or
+ * `:>>`/the `redefines` keyword (a usage overriding another). Returns
+ * `present: false` (consuming nothing) if none of these is next.
+ */
+function parseTypeIntroducer(p: ParserState): { present: boolean; kind?: TypeRelation } {
+  if (p.at(':>>')) {
+    p.advance();
+    return { present: true, kind: ':>>' };
+  }
+  if (p.at(':>')) {
+    p.advance();
+    return { present: true, kind: ':>' };
+  }
+  if (p.at(':')) {
+    p.advance();
+    return { present: true };
+  }
+  if (p.at('redefines')) {
+    p.advance();
+    return { present: true, kind: ':>>' };
+  }
+  if (p.at('subsets')) {
+    p.advance();
+    return { present: true, kind: ':>' };
+  }
+  return { present: false };
+}
+
 /** Consumes an optional `[multiplicity]` clause, returning its raw inner text if present. */
 function parseOptionalMultiplicity(p: ParserState): string | undefined {
   if (!p.at('[')) return undefined;
@@ -148,29 +179,35 @@ function parseOptionalMultiplicity(p: ParserState): string | undefined {
 /**
  * A part usage's type and multiplicity can appear in either order
  * (`part inventory : Product [8];` vs `part adult[*] : Person;`), and the
- * type can be introduced by `:`, `:>` (subsets), or `:>>` (redefines, which
- * our lexer sees as `:>` followed by a dropped `>`) — so this loops rather
- * than assuming a fixed order or a single separator.
+ * type can be introduced by `:` (typed by), `:>`/`subsets`, or
+ * `:>>`/`redefines` — so this loops rather than assuming a fixed order or a
+ * single separator. If more than one type-introducing relation appears on
+ * the same usage (`part x : Type :> base;`), the last one wins — combining
+ * a defining type with a subsets/redefines target hasn't been seen in this
+ * subset's validation corpus, so this doesn't try to track both at once.
  */
 function parseOptionalTypeAndMultiplicity(p: ParserState): {
   type?: string;
+  typeKind?: TypeRelation;
   multiplicity?: string;
 } {
   let type: string | undefined;
+  let typeKind: TypeRelation | undefined;
   let multiplicity: string | undefined;
   for (;;) {
     if (multiplicity === undefined && p.at('[')) {
       multiplicity = parseOptionalMultiplicity(p);
       continue;
     }
-    if (type === undefined && (p.at(':') || p.at(':>'))) {
-      p.advance();
+    const rel = parseTypeIntroducer(p);
+    if (rel.present) {
       type = parseQualifiedName(p);
+      typeKind = rel.kind;
       continue;
     }
     break;
   }
-  return { type, multiplicity };
+  return { type, typeKind, multiplicity };
 }
 
 /**
@@ -234,29 +271,33 @@ function parseAttribute(p: ParserState): AttributeNode {
   p.expect('attribute');
   const name = p.advance().value;
   let type: string | undefined;
-  let value: string | undefined;
-  if (p.at(':>') || p.at(':')) {
-    p.advance();
+  let typeKind: TypeRelation | undefined;
+  const rel = parseTypeIntroducer(p);
+  if (rel.present) {
     type = parseQualifiedName(p);
+    typeKind = rel.kind;
   }
+  let value: string | undefined;
   if (p.at('=')) {
     p.advance();
     value = parseRawUntil(p, [';']);
   }
   if (p.at(';')) p.advance();
-  return { name, type, value };
+  return { name, type, typeKind, value };
 }
 
 function parsePortRef(p: ParserState): PortRefNode {
   p.expect('port');
   const name = p.advance().value;
   let type: string | undefined;
-  if (p.at(':')) {
-    p.advance();
+  let typeKind: TypeRelation | undefined;
+  const rel = parseTypeIntroducer(p);
+  if (rel.present) {
     type = parseQualifiedName(p);
+    typeKind = rel.kind;
   }
   if (p.at(';')) p.advance();
-  return { name, type };
+  return { name, type, typeKind };
 }
 
 /**
@@ -272,7 +313,7 @@ function parsePartUsage(p: ParserState): PartUsageNode | undefined {
     return undefined;
   }
   const name = p.advance().value;
-  const { type, multiplicity } = parseOptionalTypeAndMultiplicity(p);
+  const { type, typeKind, multiplicity } = parseOptionalTypeAndMultiplicity(p);
   if (p.at('{')) {
     // A usage's inline body (redefinitions, further nested containment) is
     // outside this subset's rendering depth (see README) — skip it.
@@ -281,7 +322,7 @@ function parsePartUsage(p: ParserState): PartUsageNode | undefined {
   } else if (p.at(';')) {
     p.advance();
   }
-  return { name, type, multiplicity };
+  return { name, type, typeKind, multiplicity };
 }
 
 /**
@@ -369,7 +410,7 @@ function parseConnectionUsage(p: ParserState, connectors: ConnectorNode[]): void
       if (p.at('::>')) {
         p.advance();
         boundEnds.push(parseConnectorEndpoint(p));
-      } else if (p.at(':') || p.at(':>')) {
+      } else if (p.at(':') || p.at(':>') || p.at(':>>')) {
         p.advance();
         parseQualifiedName(p); // a plain type reference, not a binding
         parseOptionalMultiplicity(p);
@@ -471,7 +512,7 @@ function parseTopLevelPartUsage(p: ParserState): PartDefNode | undefined {
     return undefined;
   }
   const name = p.advance().value;
-  const { type: usageType } = parseOptionalTypeAndMultiplicity(p);
+  const { type: usageType, typeKind: usageTypeKind } = parseOptionalTypeAndMultiplicity(p);
   if (!p.at('{')) {
     if (p.at(';')) p.advance();
     return undefined;
@@ -481,6 +522,7 @@ function parseTopLevelPartUsage(p: ParserState): PartDefNode | undefined {
     name,
     isUsage: true,
     usageType,
+    usageTypeKind,
     attributes: [],
     ports: [],
     parts: [],
@@ -495,19 +537,26 @@ function parsePortField(p: ParserState): PortFieldNode {
   if (p.at('item') || p.at('ref')) p.advance();
   const name = p.advance().value;
   let type: string | undefined;
-  if (p.at(':>') || p.at(':')) {
-    p.advance();
+  let typeKind: TypeRelation | undefined;
+  const rel = parseTypeIntroducer(p);
+  if (rel.present) {
     type = parseQualifiedName(p);
+    typeKind = rel.kind;
   }
   if (p.at(';')) p.advance();
-  return { direction, name, type };
+  return { direction, name, type, typeKind };
 }
 
 function parsePortDef(p: ParserState): PortDefNode {
   p.expect('port');
   p.expect('def');
   const name = p.advance().value;
-  const def: PortDefNode = { kind: 'portDef', name, fields: [] };
+  let superType: string | undefined;
+  if (p.at(':>') || p.at(':')) {
+    p.advance();
+    superType = parseQualifiedName(p);
+  }
+  const def: PortDefNode = { kind: 'portDef', name, superType, fields: [] };
   if (p.at('{')) {
     p.advance();
     for (;;) {
@@ -534,19 +583,26 @@ function parseInterfaceEnd(p: ParserState): InterfaceEndNode {
   p.expect('end');
   const name = p.advance().value;
   let type: string | undefined;
-  if (p.at(':')) {
-    p.advance();
+  let typeKind: TypeRelation | undefined;
+  const rel = parseTypeIntroducer(p);
+  if (rel.present) {
     type = parseQualifiedName(p);
+    typeKind = rel.kind;
   }
   if (p.at(';')) p.advance();
-  return { name, type };
+  return { name, type, typeKind };
 }
 
 function parseInterfaceDef(p: ParserState): InterfaceDefNode {
   p.expect('interface');
   p.expect('def');
   const name = p.advance().value;
-  const def: InterfaceDefNode = { kind: 'interfaceDef', name, ends: [], flows: [] };
+  let superType: string | undefined;
+  if (p.at(':>') || p.at(':')) {
+    p.advance();
+    superType = parseQualifiedName(p);
+  }
+  const def: InterfaceDefNode = { kind: 'interfaceDef', name, superType, ends: [], flows: [] };
   if (p.at('{')) {
     p.advance();
     for (;;) {
@@ -579,13 +635,15 @@ function parseConnectionEnd(p: ParserState): InterfaceEndNode {
   if (p.at('part')) p.advance();
   const name = p.advance().value;
   let type: string | undefined;
-  if (p.at(':>') || p.at(':')) {
-    p.advance();
+  let typeKind: TypeRelation | undefined;
+  const rel = parseTypeIntroducer(p);
+  if (rel.present) {
     type = parseQualifiedName(p);
+    typeKind = rel.kind;
     parseOptionalMultiplicity(p);
   }
   if (p.at(';')) p.advance();
-  return { name, type };
+  return { name, type, typeKind };
 }
 
 /**

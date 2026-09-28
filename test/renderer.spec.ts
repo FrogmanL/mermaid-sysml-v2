@@ -261,6 +261,62 @@ part def Person;`);
     expect(familyNode.querySelectorAll(':scope > .connector-arrow').length).toBe(0);
   });
 
+  it('draws a hollow-triangle specialization arrow between two definition boxes sharing a :> relationship', () => {
+    db.parse(`sysml-v2
+part def Axle {
+  attribute mass;
+}
+part def FrontAxle :> Axle {
+  attribute steeringAngle;
+}`);
+    select(document.body).append('svg').attr('id', 'sysml-test-15');
+    draw('', 'sysml-test-15', '0.0.0');
+
+    const svgEl = document.querySelector('#sysml-test-15')!;
+    expect(svgEl.querySelectorAll('line.specialization-line').length).toBe(1);
+    expect(svgEl.querySelectorAll('polygon.specialization-arrow').length).toBe(1);
+  });
+
+  it('skips the specialization arrow when the supertype has no box in this diagram (a library type)', () => {
+    db.parse(`sysml-v2
+part def Vehicle :> ISQ::PhysicalObject {
+  attribute mass;
+}`);
+    select(document.body).append('svg').attr('id', 'sysml-test-16');
+    draw('', 'sysml-test-16', '0.0.0');
+
+    const svgEl = document.querySelector('#sysml-test-16')!;
+    expect(svgEl.querySelectorAll('line.specialization-line').length).toBe(0);
+  });
+
+  it('shows the actual relation operator (:>) an attribute was introduced by, not always a plain :', () => {
+    db.parse(`sysml-v2
+part def Vehicle {
+  attribute mass :> ISQ::mass;
+}`);
+    select(document.body).append('svg').attr('id', 'sysml-test-17');
+    draw('', 'sysml-test-17', '0.0.0');
+
+    const vehicleNode = findNodeByTitle(document.querySelector('#sysml-test-17')!, 'Vehicle');
+    const texts = Array.from(vehicleNode.querySelectorAll('.member')).map((el) => el.textContent);
+    expect(texts).toContain('mass :> ISQ::mass');
+  });
+
+  it('shows :>> (redefines) on a composition-tree usage label, not a plain :', () => {
+    db.parse(`sysml-v2
+part def Family {
+  part base : Person;
+  part socialService :>> base;
+}
+part def Person;`);
+    select(document.body).append('svg').attr('id', 'sysml-test-18');
+    draw('', 'sysml-test-18', '0.0.0');
+
+    const familyNode = findNodeByTitle(document.querySelector('#sysml-test-18')!, 'Family');
+    const texts = Array.from(familyNode.querySelectorAll('.member')).map((el) => el.textContent);
+    expect(texts).toContain('socialService :>> base');
+  });
+
   it('renders a connection def like interface def, with ends and attributes compartments', () => {
     db.parse(`sysml-v2
 connection def DeviceConn {

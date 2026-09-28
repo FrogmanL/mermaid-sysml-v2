@@ -39,7 +39,9 @@ describe('parseSysml', () => {
     const vehicle = model.definitions.find((d) => d.name === 'Vehicle');
     expect(vehicle?.kind).toBe('partDef');
     if (vehicle?.kind !== 'partDef') throw new Error('expected partDef');
-    expect(vehicle.attributes).toEqual([{ name: 'mass', type: 'ISQ::mass', value: undefined }]);
+    expect(vehicle.attributes).toEqual([
+      { name: 'mass', type: 'ISQ::mass', typeKind: ':>', value: undefined },
+    ]);
   });
 
   it('parses ports on a part def', () => {
@@ -65,7 +67,7 @@ describe('parseSysml', () => {
     const axleMountIF = model.definitions.find((d) => d.name === 'AxleMountIF');
     if (axleMountIF?.kind !== 'portDef') throw new Error('expected portDef');
     expect(axleMountIF.fields).toEqual([
-      { direction: 'out', name: 'transferredTorque', type: 'ISQ::torque' },
+      { direction: 'out', name: 'transferredTorque', type: 'ISQ::torque', typeKind: ':>' },
     ]);
   });
 
@@ -116,7 +118,9 @@ action providePower {
 }`);
     const vehicle = model.definitions.find((d) => d.name === 'Vehicle');
     if (vehicle?.kind !== 'partDef') throw new Error('expected partDef');
-    expect(vehicle.attributes).toEqual([{ name: 'mass', type: 'ISQ::mass', value: undefined }]);
+    expect(vehicle.attributes).toEqual([
+      { name: 'mass', type: 'ISQ::mass', typeKind: ':>', value: undefined },
+    ]);
   });
 
   // Regression: skipUnknownMember used to keep consuming tokens after closing
@@ -303,6 +307,62 @@ part def RearAxle;`);
     expect(frontAxle.superType).toBe('Axle');
     expect(frontAxle.attributes.map((a) => a.name)).toEqual(['steeringAngle']);
     expect(model.definitions.map((d) => d.name)).toEqual(['Axle', 'FrontAxle', 'RearAxle']);
+  });
+
+  it('parses `:>` on a port def / interface def as specialization too, not just part def', () => {
+    const model = parseSysml(`sysml-v2
+port def BasePort;
+port def SubPort :> BasePort;
+interface def BaseIF;
+interface def SubIF :> BaseIF;`);
+    const subPort = model.definitions.find((d) => d.name === 'SubPort');
+    const subIF = model.definitions.find((d) => d.name === 'SubIF');
+    if (subPort?.kind !== 'portDef') throw new Error('expected portDef');
+    if (subIF?.kind !== 'interfaceDef') throw new Error('expected interfaceDef');
+    expect(subPort.superType).toBe('BasePort');
+    expect(subIF.superType).toBe('BaseIF');
+  });
+
+  // Regression: `:>>` (redefines) mis-lexed exactly like `::>` used to — the
+  // lexer only recognized `:>` (2 chars), so the trailing `>` fell through
+  // to "unknown char, skip" and vanished before the parser ever saw it.
+  // Confirmed by checking the local end name is fully discarded and only the
+  // redefined-to path survives, which wouldn't be distinguishable from a
+  // mis-lexed `:>` if the third character had been silently dropped.
+  it('tokenizes and parses :>> (redefines) as its own relation, distinct from :>', () => {
+    const model = parseSysml(`sysml-v2
+part def Family {
+  part adultMember : Person;
+  part socialService :>> adultMember;
+}
+part def Person;`);
+    const def = model.definitions[0];
+    if (def.kind !== 'partDef') throw new Error('expected partDef');
+    expect(def.parts).toEqual([
+      { name: 'adultMember', type: 'Person', multiplicity: undefined },
+      { name: 'socialService', type: 'adultMember', typeKind: ':>>', multiplicity: undefined },
+    ]);
+  });
+
+  it('accepts the subsets/redefines keyword forms as equivalent to :>/:>> shorthand', () => {
+    const model = parseSysml(`sysml-v2
+part def Family {
+  part base : Person;
+  part viaSubsets subsets base;
+  part viaRedefines redefines base;
+}
+part def Person;`);
+    const def = model.definitions[0];
+    if (def.kind !== 'partDef') throw new Error('expected partDef');
+    const bySubsets = def.parts.find((p) => p.name === 'viaSubsets');
+    const byRedefines = def.parts.find((p) => p.name === 'viaRedefines');
+    expect(bySubsets).toEqual({ name: 'viaSubsets', type: 'base', typeKind: ':>', multiplicity: undefined });
+    expect(byRedefines).toEqual({
+      name: 'viaRedefines',
+      type: 'base',
+      typeKind: ':>>',
+      multiplicity: undefined,
+    });
   });
 
   it('marks a part def as not a usage, and a bare top-level part usage as one, with its type captured separately', () => {

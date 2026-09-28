@@ -20,6 +20,8 @@ describe('getStyles', () => {
       ['line', 'tree-line'],
       ['polygon', 'tree-diamond'],
       ['circle', 'connector-junction'],
+      ['line', 'specialization-line'],
+      ['polygon', 'specialization-arrow'],
     ];
     for (const [el, cls] of elementClassed) {
       expect(css).toMatch(new RegExp(`${el}\\.${cls}\\s*\\{`));

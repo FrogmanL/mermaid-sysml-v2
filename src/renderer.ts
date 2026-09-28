@@ -2,7 +2,7 @@ import { select } from 'd3';
 import type { Selection } from 'd3';
 import { log, getConfig, setupGraphViewbox } from './mermaidUtils.js';
 import { getModel, getAccTitle, getAccDescription } from './db.js';
-import type { ConnectorNode, DefinitionNode, PartUsageNode } from './parser/ast.js';
+import type { ConnectorNode, DefinitionNode, PartUsageNode, TypeRelation } from './parser/ast.js';
 
 type G = Selection<SVGGElement, unknown, null, undefined>;
 
@@ -41,6 +41,11 @@ const TREE_STEM_BOTTOM = 14;
 const TREE_LEVEL_GAP = TREE_DIAMOND * 2 + TREE_STEM_MID + TREE_STEM_BOTTOM;
 const MAX_TREE_DEPTH = 6;
 
+// Specialization-arrow layout constants (top-level definition-to-definition
+// generalization arrows).
+const SPEC_ARROW_LEN = 14;
+const SPEC_ARROW_WIDTH = 10;
+
 interface PreparedBox {
   width: number;
   height: number;
@@ -50,6 +55,17 @@ interface PreparedBox {
 
 function estimateTextWidth(text: string, fontSize: number, bold = false): number {
   return text.length * fontSize * (bold ? 0.66 : 0.6);
+}
+
+/**
+ * Renders a type reference with the operator it was actually introduced by
+ * — `:` (typed by, the default when `typeKind` is absent), `:>` (subsets),
+ * or `:>>` (redefines) — so the diagram shows the same relationship the
+ * source text does, rather than collapsing all three to a plain colon.
+ * Returns '' when there's no type at all, so callers can just append it.
+ */
+function typeSuffix(type: string | undefined, typeKind: TypeRelation | undefined): string {
+  return type ? ` ${typeKind ?? ':'} ${type}` : '';
 }
 
 /** A box's outer border: sharp corners for a `def` (per spec), rounded for a usage. */
@@ -86,15 +102,16 @@ function drawHeader(node: G, width: number, stereotype: string, name: string, of
     .text(name);
 }
 
-/** «part def» / «part» etc., and the header name — a usage shows "name : Type", a definition just its name. */
+/** «part def» / «part» etc., and the header name — a usage shows "name : Type" (or `:>`/`:>>` per how it was introduced), a definition just its name. */
 function partStereotypeAndName(def: {
   kind: string;
   name: string;
   isUsage?: boolean;
   usageType?: string;
+  usageTypeKind?: TypeRelation;
 }): { stereotype: string; displayName: string } {
   if (def.isUsage) {
-    return { stereotype: 'part', displayName: def.usageType ? `${def.name} : ${def.usageType}` : def.name };
+    return { stereotype: 'part', displayName: `${def.name}${typeSuffix(def.usageType, def.usageTypeKind)}` };
   }
   return { stereotype: 'part def', displayName: def.name };
 }
@@ -131,18 +148,14 @@ function toLeafBox(def: DefinitionNode): LeafBox {
       compartments.push({
         label: 'attributes',
         lines: def.attributes.map((a) =>
-          a.value !== undefined
-            ? `${a.name} = ${a.value}`
-            : a.type
-              ? `${a.name} : ${a.type}`
-              : a.name
+          a.value !== undefined ? `${a.name} = ${a.value}` : `${a.name}${typeSuffix(a.type, a.typeKind)}`
         ),
       });
     }
     if (def.ports.length) {
       compartments.push({
         label: 'ports',
-        lines: def.ports.map((p) => (p.type ? `${p.name} : ${p.type}` : p.name)),
+        lines: def.ports.map((p) => `${p.name}${typeSuffix(p.type, p.typeKind)}`),
       });
     }
     return { stereotype, name: displayName, rounded: !!def.isUsage, doc: def.doc, compartments };
@@ -152,7 +165,7 @@ function toLeafBox(def: DefinitionNode): LeafBox {
     if (def.fields.length) {
       compartments.push({
         label: 'flow properties',
-        lines: def.fields.map((f) => `${f.direction} ${f.name}${f.type ? ` : ${f.type}` : ''}`),
+        lines: def.fields.map((f) => `${f.direction} ${f.name}${typeSuffix(f.type, f.typeKind)}`),
       });
     }
     return { stereotype: 'port def', name: def.name, rounded: false, doc: def.doc, compartments };
@@ -162,7 +175,7 @@ function toLeafBox(def: DefinitionNode): LeafBox {
     if (def.ends.length) {
       compartments.push({
         label: 'ends',
-        lines: def.ends.map((e) => (e.type ? `${e.name} : ${e.type}` : e.name)),
+        lines: def.ends.map((e) => `${e.name}${typeSuffix(e.type, e.typeKind)}`),
       });
     }
     if (def.flows.length) {
@@ -176,14 +189,14 @@ function toLeafBox(def: DefinitionNode): LeafBox {
     compartments.push({
       label: 'attributes',
       lines: def.attributes.map((a) =>
-        a.value !== undefined ? `${a.name} = ${a.value}` : a.type ? `${a.name} : ${a.type}` : a.name
+        a.value !== undefined ? `${a.name} = ${a.value}` : `${a.name}${typeSuffix(a.type, a.typeKind)}`
       ),
     });
   }
   if (def.ends.length) {
     compartments.push({
       label: 'ends',
-      lines: def.ends.map((e) => (e.type ? `${e.name} : ${e.type}` : e.name)),
+      lines: def.ends.map((e) => `${e.name}${typeSuffix(e.type, e.typeKind)}`),
     });
   }
   return { stereotype: 'connection def', name: def.name, rounded: false, doc: def.doc, compartments };
@@ -269,6 +282,7 @@ function prepareLeafBox(def: DefinitionNode): PreparedBox {
 interface ContainerChildInput {
   name: string;
   type?: string;
+  typeKind?: TypeRelation;
   ports: string[];
 }
 
@@ -280,14 +294,15 @@ interface ChildPort {
 interface ChildLayout {
   name: string;
   type?: string;
+  typeKind?: TypeRelation;
   x: number;
   width: number;
   height: number;
   ports: ChildPort[];
 }
 
-function childLabel(name: string, type?: string): string {
-  return type ? `${name} : ${type}` : name;
+function childLabel(name: string, type?: string, typeKind?: TypeRelation): string {
+  return `${name}${typeSuffix(type, typeKind)}`;
 }
 
 function measureChildren(children: ContainerChildInput[]): {
@@ -300,7 +315,7 @@ function measureChildren(children: ContainerChildInput[]): {
   let maxHeight = 0;
 
   for (const child of children) {
-    const labelWidth = estimateTextWidth(childLabel(child.name, child.type), 12, true) + CHILD_PAD * 2;
+    const labelWidth = estimateTextWidth(childLabel(child.name, child.type, child.typeKind), 12, true) + CHILD_PAD * 2;
     const portsWidth = child.ports.length * PORT_SLOT_W;
     const width = Math.max(CHILD_MIN_WIDTH, labelWidth, portsWidth);
     const height = CHILD_HEADER_H + CHILD_PAD * 2;
@@ -308,7 +323,7 @@ function measureChildren(children: ContainerChildInput[]): {
       name,
       x: (width / (child.ports.length + 1)) * (i + 1),
     }));
-    layouts.push({ name: child.name, type: child.type, x, width, height, ports });
+    layouts.push({ name: child.name, type: child.type, typeKind: child.typeKind, x, width, height, ports });
     x += width + CHILD_GAP;
     maxHeight = Math.max(maxHeight, height);
   }
@@ -504,7 +519,7 @@ function prepareContainerBox(
           .attr('y', child.height / 2 + 4)
           .attr('text-anchor', 'middle')
           .attr('font-size', '12px')
-          .text(childLabel(child.name, child.type));
+          .text(childLabel(child.name, child.type, child.typeKind));
 
         for (const port of child.ports) {
           childNode
@@ -542,7 +557,7 @@ interface TreeDataNode {
 }
 
 function treeUsageLabel(usage: PartUsageNode): string {
-  const base = usage.type ? `${usage.name} : ${usage.type}` : usage.name;
+  const base = `${usage.name}${typeSuffix(usage.type, usage.typeKind)}`;
   return usage.multiplicity ? `${base} [${usage.multiplicity}]` : base;
 }
 
@@ -766,11 +781,16 @@ function prepareTreeBox(
 // Top-level layout and draw
 // ---------------------------------------------------------------------------
 
-function toRenderList(definitions: DefinitionNode[]): PreparedBox[] {
+interface RenderEntry {
+  box: PreparedBox;
+  def: DefinitionNode;
+}
+
+function toRenderList(definitions: DefinitionNode[]): RenderEntry[] {
   const byName = new Map<string, DefinitionNode>();
   for (const def of definitions) byName.set(def.name, def);
 
-  return definitions.map((def): PreparedBox => {
+  return definitions.map((def): RenderEntry => {
     if (def.kind === 'partDef' && def.parts.length) {
       const { stereotype, displayName } = partStereotypeAndName(def);
       const rounded = !!def.isUsage;
@@ -778,40 +798,130 @@ function toRenderList(definitions: DefinitionNode[]): PreparedBox[] {
         const children: ContainerChildInput[] = def.parts.map((usage) => {
           const childDef = usage.type ? byName.get(usage.type) : undefined;
           const ports = childDef && childDef.kind === 'partDef' ? childDef.ports.map((p) => p.name) : [];
-          return { name: usage.name, type: usage.type, ports };
+          return { name: usage.name, type: usage.type, typeKind: usage.typeKind, ports };
         });
-        return prepareContainerBox(stereotype, displayName, def.doc, rounded, children, def.connectors);
+        return { box: prepareContainerBox(stereotype, displayName, def.doc, rounded, children, def.connectors), def };
       }
-      return prepareTreeBox(stereotype, displayName, def.doc, rounded, def.parts, byName);
+      return { box: prepareTreeBox(stereotype, displayName, def.doc, rounded, def.parts, byName), def };
     }
-    return prepareLeafBox(def);
+    return { box: prepareLeafBox(def), def };
   });
 }
 
 interface Positioned {
   box: PreparedBox;
+  def: DefinitionNode;
   x: number;
   y: number;
 }
 
-function layout(boxes: PreparedBox[], maxRowWidth: number): Positioned[] {
+function layout(entries: RenderEntry[], maxRowWidth: number): Positioned[] {
   const positioned: Positioned[] = [];
   let x = 0;
   let y = 0;
   let rowHeight = 0;
 
-  for (const box of boxes) {
-    if (x > 0 && x + box.width > maxRowWidth) {
+  for (const entry of entries) {
+    if (x > 0 && x + entry.box.width > maxRowWidth) {
       x = 0;
       y += rowHeight + GAP_Y;
       rowHeight = 0;
     }
-    positioned.push({ box, x, y });
-    x += box.width + GAP_X;
-    rowHeight = Math.max(rowHeight, box.height);
+    positioned.push({ box: entry.box, def: entry.def, x, y });
+    x += entry.box.width + GAP_X;
+    rowHeight = Math.max(rowHeight, entry.box.height);
   }
 
   return positioned;
+}
+
+// ---------------------------------------------------------------------------
+// Specialization arrows: a hollow-triangle generalization arrow (per the
+// spec's own graphical notation) drawn between two top-level DEFINITION
+// boxes that share a `:>` specialization relationship (`part def X :> Y`,
+// `port def X :> Y`, etc.) — tip at the supertype end. Only drawn when the
+// supertype resolves to another box actually present in this diagram; a
+// library supertype (e.g. `:> ISQ::MassValue`) is parsed and kept on the
+// node, but has nothing in the diagram to point at, so it's skipped.
+// ---------------------------------------------------------------------------
+
+interface Rect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+function rectCenter(r: Rect): { x: number; y: number } {
+  return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+}
+
+/** The point on `r`'s border along the ray from its own center toward `target`. */
+function clipToRectBorder(r: Rect, target: { x: number; y: number }): { x: number; y: number } {
+  const c = rectCenter(r);
+  const dx = target.x - c.x;
+  const dy = target.y - c.y;
+  if (dx === 0 && dy === 0) return c;
+  const hw = r.width / 2;
+  const hh = r.height / 2;
+  const scaleX = dx !== 0 ? hw / Math.abs(dx) : Infinity;
+  const scaleY = dy !== 0 ? hh / Math.abs(dy) : Infinity;
+  const scale = Math.min(scaleX, scaleY);
+  return { x: c.x + dx * scale, y: c.y + dy * scale };
+}
+
+/** A plain line from the subtype box to the supertype box, with a hollow (background-filled) triangle at the supertype end — the spec's own generalization-arrow notation. */
+function drawSpecializationArrow(g: G, subRect: Rect, superRect: Rect): void {
+  const subCenter = rectCenter(subRect);
+  const superCenter = rectCenter(superRect);
+  const tip = clipToRectBorder(superRect, subCenter);
+  const tail = clipToRectBorder(subRect, superCenter);
+
+  const dx = tip.x - tail.x;
+  const dy = tip.y - tail.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len;
+  const uy = dy / len;
+  const baseX = tip.x - ux * SPEC_ARROW_LEN;
+  const baseY = tip.y - uy * SPEC_ARROW_LEN;
+  const px = -uy;
+  const py = ux;
+
+  g.append('line')
+    .attr('class', 'specialization-line')
+    .attr('x1', tail.x)
+    .attr('y1', tail.y)
+    .attr('x2', baseX)
+    .attr('y2', baseY);
+
+  g.append('polygon')
+    .attr('class', 'specialization-arrow')
+    .attr(
+      'points',
+      `${tip.x},${tip.y} ${baseX + (px * SPEC_ARROW_WIDTH) / 2},${baseY + (py * SPEC_ARROW_WIDTH) / 2} ${baseX - (px * SPEC_ARROW_WIDTH) / 2},${baseY - (py * SPEC_ARROW_WIDTH) / 2}`
+    );
+}
+
+/** `A::B::Name` -> `Name` — packages are flattened and definitions matched by simple name only, so a qualified supertype is resolved by its last segment. */
+function lastSegment(qualifiedName: string): string {
+  const idx = qualifiedName.lastIndexOf('::');
+  return idx === -1 ? qualifiedName : qualifiedName.slice(idx + 2);
+}
+
+function drawSpecializationArrows(g: G, positioned: Positioned[]): void {
+  const rectsByName = new Map<string, Rect>();
+  for (const p of positioned) {
+    rectsByName.set(p.def.name, { x: p.x, y: p.y, width: p.box.width, height: p.box.height });
+  }
+  for (const p of positioned) {
+    const superType = p.def.superType;
+    if (!superType) continue;
+    const superRect = rectsByName.get(lastSegment(superType));
+    if (!superRect) continue;
+    const subRect = rectsByName.get(p.def.name)!;
+    if (subRect === superRect) continue;
+    drawSpecializationArrow(g, subRect, superRect);
+  }
 }
 
 export const draw = (_text: string, id: string, _version: string): void => {
@@ -855,11 +965,13 @@ export const draw = (_text: string, id: string, _version: string): void => {
       return;
     }
 
-    for (const { box, x, y } of layout(toRenderList(model.definitions), maxRowWidth)) {
+    const positioned = layout(toRenderList(model.definitions), maxRowWidth);
+    for (const { box, x, y } of positioned) {
       const node = g.append('g').attr('class', 'node').attr('transform', `translate(${x},${y})`);
       if (box.doc) node.append('title').text(box.doc);
       box.render(node);
     }
+    drawSpecializationArrows(g, positioned);
 
     setupGraphViewbox(undefined, svg, 8, useMaxWidth);
   } catch (e) {
