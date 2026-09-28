@@ -158,9 +158,56 @@ export interface EnumDefNode {
   values: string[];
 }
 
+/** Shared by `requirement def`/usage and `use case def`/usage — both use the identical `subject name [: Type];` grammar. */
 export interface RequirementSubjectNode {
   name: string;
   type?: string;
+}
+
+/**
+ * A use case def/usage's `actor name [: Type] [multiplicity];` (definition
+ * form) or `actor name = existingActor;` (usage form, redefining an actor
+ * inherited from the def by reference rather than giving it a fresh type) —
+ * confirmed against the OMG's own training corpus
+ * (`Systems-Modeling/SysML-v2-Release/sysml/src/training/35. Use Cases`).
+ * Multiplicity is parsed (via the shared type/multiplicity helper) but not
+ * kept — this subset doesn't show it on the actor icon.
+ */
+export interface UseCaseActorNode {
+  name: string;
+  type?: string;
+  value?: string;
+}
+
+/**
+ * `use case def Name [:> Super] { subject s [: Type]; actor a [: Type]; objective { doc ...; } }`,
+ * or a bare `use case name [: Type] { ... }` usage — always kept even
+ * body-less, same rationale as `RequirementDefNode`, since an `include`
+ * relationship needs a box to point at. Confirmed against the OMG's own
+ * training corpus's `Use Case Definition/Usage Example.sysml`.
+ *
+ * Deliberately out of scope for this round (see README): the `first`/`then`/
+ * `done` activity-style control-flow vocabulary real use-case usages nest
+ * their steps in, and a bare (non-`include`-keyword) nested `use case` step —
+ * both are really activity/behavior composition riding on top of use cases,
+ * not the use-case-diagram relationships this subset targets. Only an
+ * explicit `include` (optionally `then`-prefixed, which is consumed and
+ * discarded) is extracted, as a `TraceabilityNode` alongside satisfy/verify/
+ * trace/allocate/derive — so a real model's `then use case X { include Y; }`
+ * loses `Y`'s inclusion (nested two levels deep), a known, documented gap.
+ */
+export interface UseCaseDefNode {
+  kind: 'useCaseDef';
+  name: string;
+  isUsage?: boolean;
+  usageType?: string;
+  /** Definition only: supertype after `:>` (specialization). */
+  superType?: string;
+  doc?: string;
+  /** The `objective { doc ...; }` block's text, kept separate from `doc` since it's a distinct spec concept (the use case's goal, not an ordinary comment). */
+  objective?: string;
+  subject?: RequirementSubjectNode;
+  actors: UseCaseActorNode[];
 }
 
 /**
@@ -192,9 +239,11 @@ export interface RequirementDefNode {
 
 /**
  * A top-level cross-cutting traceability statement: `satisfy req by x;`,
- * `verify req by x;`, `trace a to b;`, `allocate a to b;`. Only `satisfy` is
- * confirmed against a real corpus file (`examples/bvm.mmd`); `verify`/
- * `trace`/`allocate` follow the same grammar shape per the SysML v2 spec but
+ * `verify req by x;`, `trace a to b;`, `allocate a to b;`, or a use case's
+ * `include` (source: the including use case, target: the included one —
+ * see `UseCaseDefNode`). Only `satisfy`, requirement derivation, and
+ * `include` are confirmed against a real corpus file; `verify`/`trace`/
+ * `allocate` follow the same grammar shape per the SysML v2 spec but
  * haven't turned up in a local example yet. `source`/`target` are raw
  * dotted paths (see `parseFeaturePath`) — only a simple name matching a box
  * in the diagram resolves to a drawn arrow (see renderer's "Known
@@ -202,7 +251,7 @@ export interface RequirementDefNode {
  * usually won't.
  */
 export interface TraceabilityNode {
-  kind: 'satisfy' | 'verify' | 'trace' | 'allocate';
+  kind: 'satisfy' | 'verify' | 'trace' | 'allocate' | 'include';
   source: string;
   target: string;
 }
@@ -214,7 +263,8 @@ export type DefinitionNode =
   | ConnectionDefNode
   | RequirementDefNode
   | AttributeDefNode
-  | EnumDefNode;
+  | EnumDefNode
+  | UseCaseDefNode;
 
 export interface SysmlModel {
   packageName?: string;

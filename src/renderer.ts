@@ -2,7 +2,15 @@ import { select } from 'd3';
 import type { Selection } from 'd3';
 import { log, getConfig, setupGraphViewbox } from './mermaidUtils.js';
 import { getModel, getAccTitle, getAccDescription } from './db.js';
-import type { ConnectorNode, DefinitionNode, PartUsageNode, TraceabilityNode, TypeRelation } from './parser/ast.js';
+import type {
+  ConnectorNode,
+  DefinitionNode,
+  PartUsageNode,
+  TraceabilityNode,
+  TypeRelation,
+  UseCaseActorNode,
+  UseCaseDefNode,
+} from './parser/ast.js';
 
 type G = Selection<SVGGElement, unknown, null, undefined>;
 
@@ -46,6 +54,19 @@ const MAX_TREE_DEPTH = 6;
 const SPEC_ARROW_LEN = 14;
 const SPEC_ARROW_WIDTH = 10;
 
+// Use-case actor layout constants (stick-figure icons in a column beside a
+// use case box, one per `actor` member).
+const ACTOR_HEAD_R = 5;
+const ACTOR_BODY_H = 16;
+const ACTOR_ARM_W = 7;
+const ACTOR_LEG_W = 6;
+const ACTOR_ICON_H = ACTOR_HEAD_R * 2 + ACTOR_BODY_H;
+const ACTOR_MIN_COL_WIDTH = ACTOR_ARM_W * 2 + 4;
+const ACTOR_LABEL_GAP = 4;
+const ACTOR_LABEL_H = 12;
+const ACTOR_ROW_GAP = 14;
+const ACTOR_COL_GAP = 30;
+
 interface PreparedBox {
   width: number;
   height: number;
@@ -76,18 +97,19 @@ function boxRect(node: G, x: number, y: number, width: number, height: number, r
 }
 
 /**
- * `offsetX` lets a header be centered within a box that itself sits at a
- * non-zero x (the composition tree's root box, e.g., is horizontally
- * centered over its children) without wrapping it in an extra translated
- * `<g>` — keeping `.title`/`.stereotype` a direct child of `.node` in every
- * box kind, which other code (and tests) key off of.
+ * `offsetX`/`offsetY` let a header be positioned within a box that itself
+ * sits at a non-zero x/y (the composition tree's root box is horizontally
+ * centered over its children; a use case box with actors is vertically
+ * centered against its actor column) without wrapping it in an extra
+ * translated `<g>` — keeping `.title`/`.stereotype` a direct child of
+ * `.node` in every box kind, which other code (and tests) key off of.
  */
-function drawHeader(node: G, width: number, stereotype: string, name: string, offsetX = 0): void {
+function drawHeader(node: G, width: number, stereotype: string, name: string, offsetX = 0, offsetY = 0): void {
   node
     .append('text')
     .attr('class', 'stereotype')
     .attr('x', offsetX + width / 2)
-    .attr('y', PAD + STEREOTYPE_H * 0.75)
+    .attr('y', offsetY + PAD + STEREOTYPE_H * 0.75)
     .attr('text-anchor', 'middle')
     .attr('font-size', '11px')
     .text(`«${stereotype}»`);
@@ -96,7 +118,7 @@ function drawHeader(node: G, width: number, stereotype: string, name: string, of
     .append('text')
     .attr('class', 'title')
     .attr('x', offsetX + width / 2)
-    .attr('y', PAD + STEREOTYPE_H + TITLE_H * 0.68)
+    .attr('y', offsetY + PAD + STEREOTYPE_H + TITLE_H * 0.68)
     .attr('text-anchor', 'middle')
     .attr('font-size', '13px')
     .text(name);
@@ -232,12 +254,30 @@ function toLeafBox(def: DefinitionNode): LeafBox {
     }
     return { stereotype: 'attribute def', name: def.name, rounded: false, doc: def.doc, compartments };
   }
-  // enumDef
-  const compartments: RenderCompartment[] = [];
-  if (def.values.length) {
-    compartments.push({ label: 'values', lines: def.values });
+  if (def.kind === 'enumDef') {
+    const compartments: RenderCompartment[] = [];
+    if (def.values.length) {
+      compartments.push({ label: 'values', lines: def.values });
+    }
+    return { stereotype: 'enum def', name: def.name, rounded: false, doc: def.doc, compartments };
   }
-  return { stereotype: 'enum def', name: def.name, rounded: false, doc: def.doc, compartments };
+  // useCaseDef — actors are drawn as stick figures outside the box (see
+  // `prepareUseCaseBox`), not as a text compartment here.
+  const compartments: RenderCompartment[] = [];
+  if (def.subject) {
+    compartments.push({
+      label: 'subject',
+      lines: [`${def.subject.name}${typeSuffix(def.subject.type, undefined)}`],
+    });
+  }
+  const doc = def.doc && def.objective ? `${def.doc} — Objective: ${def.objective}` : def.objective ? `Objective: ${def.objective}` : def.doc;
+  return {
+    stereotype: def.isUsage ? 'use case' : 'use case def',
+    name: def.isUsage ? `${def.name}${typeSuffix(def.usageType, undefined)}` : def.name,
+    rounded: !!def.isUsage,
+    doc,
+    compartments,
+  };
 }
 
 function measureLeafBox(box: LeafBox): { width: number; height: number } {
@@ -262,6 +302,59 @@ function measureLeafBox(box: LeafBox): { width: number; height: number } {
   return { width: Math.max(MIN_WIDTH, Math.ceil(maxWidth) + PAD * 2), height: Math.ceil(height) };
 }
 
+/**
+ * Draws a compartmented box (border, header, divider/label/member lines per
+ * compartment) at an optional offset — shared by a plain leaf box and a use
+ * case box's own rectangle (which sits beside an actor column rather than
+ * at the origin). `offsetX`/`offsetY` avoid a wrapping `<g>`, same reason as
+ * `drawHeader`'s.
+ */
+function drawCompartmentedBox(
+  node: G,
+  box: LeafBox,
+  width: number,
+  height: number,
+  offsetX = 0,
+  offsetY = 0
+): void {
+  boxRect(node, offsetX, offsetY, width, height, box.rounded);
+  drawHeader(node, width, box.stereotype, box.name, offsetX, offsetY);
+
+  let cy = offsetY + PAD + STEREOTYPE_H + TITLE_H + PAD;
+  for (const comp of box.compartments) {
+    node
+      .append('line')
+      .attr('class', 'divider')
+      .attr('x1', offsetX)
+      .attr('y1', cy)
+      .attr('x2', offsetX + width)
+      .attr('y2', cy);
+    cy += DIVIDER_GAP;
+
+    if (comp.label) {
+      node
+        .append('text')
+        .attr('class', 'compartment-label')
+        .attr('x', offsetX + PAD)
+        .attr('y', cy + LABEL_H * 0.75)
+        .attr('font-size', '10.5px')
+        .text(comp.label);
+      cy += LABEL_H;
+    }
+
+    for (const line of comp.lines) {
+      node
+        .append('text')
+        .attr('class', 'member')
+        .attr('x', offsetX + PAD)
+        .attr('y', cy + ITEM_H * 0.75)
+        .attr('font-size', '11.5px')
+        .text(line);
+      cy += ITEM_H;
+    }
+  }
+}
+
 function prepareLeafBox(def: DefinitionNode): PreparedBox {
   const box = toLeafBox(def);
   const { width, height } = measureLeafBox(box);
@@ -271,41 +364,120 @@ function prepareLeafBox(def: DefinitionNode): PreparedBox {
     height,
     doc: box.doc,
     render(node) {
-      boxRect(node, 0, 0, width, height, box.rounded);
-      drawHeader(node, width, box.stereotype, box.name);
+      drawCompartmentedBox(node, box, width, height);
+    },
+  };
+}
 
-      let cy = PAD + STEREOTYPE_H + TITLE_H + PAD;
-      for (const comp of box.compartments) {
+// ---------------------------------------------------------------------------
+// Use case boxes: a `use case def`/usage's own compartmented box (same style
+// as any other leaf box) plus a column of stick-figure actors beside it,
+// each with a plain association line to the box — the one piece of classic
+// use-case-diagram notation this subset draws that isn't just a compartment
+// list, per the spec's actual visual convention for this diagram type.
+// ---------------------------------------------------------------------------
+
+/** A stick figure — head, body, arms, legs — centered on `cx`, top of the head at `headY`. */
+function drawActorIcon(node: G, cx: number, headY: number): void {
+  const headCy = headY + ACTOR_HEAD_R;
+  const neckY = headY + ACTOR_HEAD_R * 2;
+  const armY = neckY + ACTOR_BODY_H * 0.25;
+  const hipY = neckY + ACTOR_BODY_H * 0.6;
+  const footY = neckY + ACTOR_BODY_H;
+
+  node.append('circle').attr('class', 'actor-icon').attr('cx', cx).attr('cy', headCy).attr('r', ACTOR_HEAD_R);
+  node
+    .append('line')
+    .attr('class', 'actor-limb')
+    .attr('x1', cx)
+    .attr('y1', neckY)
+    .attr('x2', cx)
+    .attr('y2', hipY);
+  node
+    .append('line')
+    .attr('class', 'actor-limb')
+    .attr('x1', cx - ACTOR_ARM_W)
+    .attr('y1', armY)
+    .attr('x2', cx + ACTOR_ARM_W)
+    .attr('y2', armY);
+  node
+    .append('line')
+    .attr('class', 'actor-limb')
+    .attr('x1', cx)
+    .attr('y1', hipY)
+    .attr('x2', cx - ACTOR_LEG_W)
+    .attr('y2', footY);
+  node
+    .append('line')
+    .attr('class', 'actor-limb')
+    .attr('x1', cx)
+    .attr('y1', hipY)
+    .attr('x2', cx + ACTOR_LEG_W)
+    .attr('y2', footY);
+}
+
+function useCaseActorLabel(a: UseCaseActorNode): string {
+  if (a.value !== undefined) return `${a.name} = ${a.value}`;
+  return `${a.name}${typeSuffix(a.type, undefined)}`;
+}
+
+function prepareUseCaseBox(def: UseCaseDefNode): PreparedBox {
+  const box = toLeafBox(def);
+  const { width: boxWidth, height: boxHeight } = measureLeafBox(box);
+
+  if (!def.actors.length) {
+    return {
+      width: boxWidth,
+      height: boxHeight,
+      doc: box.doc,
+      render(node) {
+        drawCompartmentedBox(node, box, boxWidth, boxHeight);
+      },
+    };
+  }
+
+  const actorLabels = def.actors.map(useCaseActorLabel);
+  const actorColWidth = Math.max(ACTOR_MIN_COL_WIDTH, ...actorLabels.map((l) => estimateTextWidth(l, 9.5)));
+  const actorUnitH = ACTOR_ICON_H + ACTOR_LABEL_GAP + ACTOR_LABEL_H;
+  const actorColHeight = actorLabels.length * actorUnitH + (actorLabels.length - 1) * ACTOR_ROW_GAP;
+
+  const height = Math.max(actorColHeight, boxHeight);
+  const width = actorColWidth + ACTOR_COL_GAP + boxWidth;
+  const boxOffsetX = actorColWidth + ACTOR_COL_GAP;
+  const boxOffsetY = (height - boxHeight) / 2;
+  const actorColOffsetY = (height - actorColHeight) / 2;
+
+  return {
+    width,
+    height,
+    doc: box.doc,
+    render(node) {
+      drawCompartmentedBox(node, box, boxWidth, boxHeight, boxOffsetX, boxOffsetY);
+
+      let ay = actorColOffsetY;
+      const boxBorderY = boxOffsetY + boxHeight / 2;
+      for (const label of actorLabels) {
+        const cx = actorColWidth / 2;
+        drawActorIcon(node, cx, ay);
+
+        node
+          .append('text')
+          .attr('class', 'actor-label')
+          .attr('x', cx)
+          .attr('y', ay + ACTOR_ICON_H + ACTOR_LABEL_GAP + ACTOR_LABEL_H * 0.75)
+          .attr('text-anchor', 'middle')
+          .attr('font-size', '9.5px')
+          .text(label);
+
         node
           .append('line')
-          .attr('class', 'divider')
-          .attr('x1', 0)
-          .attr('y1', cy)
-          .attr('x2', width)
-          .attr('y2', cy);
-        cy += DIVIDER_GAP;
+          .attr('class', 'actor-association')
+          .attr('x1', cx)
+          .attr('y1', ay + ACTOR_ICON_H / 2)
+          .attr('x2', boxOffsetX)
+          .attr('y2', boxBorderY);
 
-        if (comp.label) {
-          node
-            .append('text')
-            .attr('class', 'compartment-label')
-            .attr('x', PAD)
-            .attr('y', cy + LABEL_H * 0.75)
-            .attr('font-size', '10.5px')
-            .text(comp.label);
-          cy += LABEL_H;
-        }
-
-        for (const line of comp.lines) {
-          node
-            .append('text')
-            .attr('class', 'member')
-            .attr('x', PAD)
-            .attr('y', cy + ITEM_H * 0.75)
-            .attr('font-size', '11.5px')
-            .text(line);
-          cy += ITEM_H;
-        }
+        ay += actorUnitH + ACTOR_ROW_GAP;
       }
     },
   };
@@ -841,6 +1013,9 @@ function toRenderList(definitions: DefinitionNode[]): RenderEntry[] {
         return { box: prepareContainerBox(stereotype, displayName, def.doc, rounded, children, def.connectors), def };
       }
       return { box: prepareTreeBox(stereotype, displayName, def.doc, rounded, def.parts, byName), def };
+    }
+    if (def.kind === 'useCaseDef') {
+      return { box: prepareUseCaseBox(def), def };
     }
     return { box: prepareLeafBox(def), def };
   });

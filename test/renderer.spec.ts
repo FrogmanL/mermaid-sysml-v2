@@ -455,4 +455,61 @@ attribute def Derived :> Base;`);
     const dispenseResultNode = findNodeByTitle(document.querySelector('#sysml-test-27')!, 'DispenseResult');
     expect(dispenseResultNode.querySelector(':scope > .stereotype')?.textContent).toBe('«enum def»');
   });
+
+  it('draws one stick-figure actor per `actor` member, with an association line to the box', () => {
+    db.parse(`sysml-v2
+use case def 'Provide Transportation' {
+  subject vehicle : Vehicle;
+  actor driver : Person;
+  actor passengers : Person[0..4];
+}`);
+    select(document.body).append('svg').attr('id', 'sysml-test-28');
+    draw('', 'sysml-test-28', '0.0.0');
+
+    const node = findNodeByTitle(document.querySelector('#sysml-test-28')!, 'Provide Transportation');
+    expect(node.querySelector(':scope > .stereotype')?.textContent).toBe('«use case def»');
+    expect(node.querySelectorAll('circle.actor-icon').length).toBe(2);
+    expect(node.querySelectorAll('line.actor-association').length).toBe(2);
+    const actorLabels = Array.from(node.querySelectorAll('text.actor-label')).map((el) => el.textContent);
+    expect(actorLabels).toEqual(['driver : Person', 'passengers : Person']);
+    const memberLines = Array.from(node.querySelectorAll('.member')).map((el) => el.textContent);
+    expect(memberLines).toContain('vehicle : Vehicle');
+  });
+
+  it('renders a use case with no actors as a plain compartmented box (no stick figures)', () => {
+    db.parse(`sysml-v2
+use case def NoActors {
+  subject vehicle : Vehicle;
+}`);
+    select(document.body).append('svg').attr('id', 'sysml-test-29');
+    draw('', 'sysml-test-29', '0.0.0');
+
+    const node = findNodeByTitle(document.querySelector('#sysml-test-29')!, 'NoActors');
+    expect(node.querySelectorAll('circle.actor-icon').length).toBe(0);
+  });
+
+  it('shows «use case» with "name : Type" for a usage, matching every other usage kind', () => {
+    db.parse(`sysml-v2
+use case def 'Provide Transportation';
+use case 'provide transportation' : 'Provide Transportation';`);
+    select(document.body).append('svg').attr('id', 'sysml-test-30');
+    draw('', 'sysml-test-30', '0.0.0');
+
+    const node = findNodeByTitle(document.querySelector('#sysml-test-30')!, 'provide transportation : Provide Transportation');
+    expect(node.querySelector(':scope > .stereotype')?.textContent).toBe('«use case»');
+  });
+
+  it('draws a dashed «include» dependency arrow between two use cases', () => {
+    db.parse(`sysml-v2
+use case 'provide transportation' {
+  include use case 'enter vehicle' : 'Enter Vehicle';
+}
+use case def 'Enter Vehicle';`);
+    select(document.body).append('svg').attr('id', 'sysml-test-31');
+    draw('', 'sysml-test-31', '0.0.0');
+
+    const svgEl = document.querySelector('#sysml-test-31')!;
+    expect(svgEl.querySelectorAll('line.dependency-line').length).toBe(1);
+    expect(svgEl.querySelector('text.dependency-label')?.textContent).toBe('«include»');
+  });
 });

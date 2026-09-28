@@ -25,6 +25,10 @@ describe('getStyles', () => {
       ['line', 'dependency-line'],
       ['polyline', 'dependency-arrowhead'],
       ['text', 'dependency-label'],
+      ['circle', 'actor-icon'],
+      ['line', 'actor-limb'],
+      ['text', 'actor-label'],
+      ['line', 'actor-association'],
     ];
     for (const [el, cls] of elementClassed) {
       expect(css).toMatch(new RegExp(`${el}\\.${cls}\\s*\\{`));

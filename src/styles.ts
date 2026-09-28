@@ -73,6 +73,22 @@ const getStyles = (options: any): string => `
 .sysml-v2 text.dependency-label {
   fill: ${options.textColor ?? options.primaryTextColor ?? '#333'};
 }
+.sysml-v2 circle.actor-icon {
+  fill: none;
+  stroke: ${options.nodeBorder ?? options.primaryBorderColor ?? '#999'};
+  stroke-width: 1px;
+}
+.sysml-v2 line.actor-limb {
+  stroke: ${options.nodeBorder ?? options.primaryBorderColor ?? '#999'};
+  stroke-width: 1px;
+}
+.sysml-v2 text.actor-label {
+  fill: ${options.textColor ?? options.primaryTextColor ?? '#333'};
+}
+.sysml-v2 line.actor-association {
+  stroke: ${options.nodeBorder ?? options.primaryBorderColor ?? '#999'};
+  stroke-width: 1px;
+}
 `;
 
 export default getStyles;

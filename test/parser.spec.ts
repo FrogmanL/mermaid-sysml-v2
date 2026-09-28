@@ -648,4 +648,133 @@ part def Vehicle {
     if (controlUnit?.kind !== 'partDef') throw new Error('expected partDef');
     expect(controlUnit.parts.find((p) => p.name === 'inventory')?.type).toBe('Product');
   });
+
+  // Use case def/usage grammar below is grounded against the OMG's own
+  // training corpus: Systems-Modeling/SysML-v2-Release/sysml/src/training/
+  // "35. Use Cases"/{Use Case Definition Example, Use Case Usage Example}.sysml.
+
+  it('parses a use case def with subject, actors, and an objective', () => {
+    const model = parseSysml(`sysml-v2
+use case def 'Provide Transportation' {
+  subject vehicle : Vehicle;
+  actor driver : Person;
+  actor passengers : Person[0..4];
+  objective {
+    doc /* Transport driver and passengers from starting location to ending location. */
+  }
+}`);
+    const def = model.definitions[0];
+    if (def?.kind !== 'useCaseDef') throw new Error('expected useCaseDef');
+    expect(def.isUsage).toBeUndefined();
+    expect(def.subject).toEqual({ name: 'vehicle', type: 'Vehicle' });
+    expect(def.actors).toEqual([
+      { name: 'driver', type: 'Person', value: undefined },
+      { name: 'passengers', type: 'Person', value: undefined },
+    ]);
+    expect(def.objective).toContain('Transport driver and passengers');
+  });
+
+  it('keeps a bare body-less use case usage (like a requirement usage, unlike a part usage)', () => {
+    const model = parseSysml(`sysml-v2
+use case def 'Provide Transportation';
+use case 'provide transportation' : 'Provide Transportation';`);
+    expect(model.definitions.map((d) => d.name)).toEqual([
+      'Provide Transportation',
+      'provide transportation',
+    ]);
+    const usage = model.definitions.find((d) => d.name === 'provide transportation');
+    if (usage?.kind !== 'useCaseDef') throw new Error('expected useCaseDef');
+    expect(usage.isUsage).toBe(true);
+    expect(usage.usageType).toBe('Provide Transportation');
+  });
+
+  it('parses an actor redefined by reference (actor x = existingActor;) in a usage', () => {
+    const model = parseSysml(`sysml-v2
+use case 'enter vehicle' : 'Enter Vehicle' {
+  subject vehicle;
+  actor driver = 'provide transportation'::driver;
+}`);
+    const def = model.definitions[0];
+    if (def?.kind !== 'useCaseDef') throw new Error('expected useCaseDef');
+    expect(def.subject).toEqual({ name: 'vehicle', type: undefined });
+    expect(def.actors).toEqual([{ name: 'driver', type: undefined, value: 'provide transportation::driver' }]);
+  });
+
+  it('parses the full `include use case name : Target { ... }` form as an include relationship', () => {
+    const model = parseSysml(`sysml-v2
+use case 'provide transportation' {
+  then include use case 'enter vehicle' : 'Enter Vehicle' {
+    subject vehicle;
+  }
+}`);
+    expect(model.traceability).toEqual([
+      { kind: 'include', source: 'provide transportation', target: 'Enter Vehicle' },
+    ]);
+  });
+
+  it('parses the shorthand `include name[mult] { ... }` form, using the bare name as the target', () => {
+    const model = parseSysml(`sysml-v2
+use case 'drive vehicle' {
+  include 'add fuel'[0..*] {
+    subject vehicle;
+  }
+}`);
+    expect(model.traceability).toEqual([{ kind: 'include', source: 'drive vehicle', target: 'add fuel' }]);
+  });
+
+  it('parses use case def specialization (:>) the same way as any other definition kind', () => {
+    const model = parseSysml(`sysml-v2
+use case def Base;
+use case def Derived :> Base;`);
+    const derived = model.definitions.find((d) => d.name === 'Derived');
+    if (derived?.kind !== 'useCaseDef') throw new Error('expected useCaseDef');
+    expect(derived.superType).toBe('Base');
+  });
+
+  // A trimmed excerpt of the OMG's own Use Case Usage Example.sysml — real
+  // idioms this subset doesn't fully model (a bare nested `use case` step,
+  // `first start;`/`then done;` control markers) mixed with ones it does
+  // (two `then include use case ...` relationships). Should parse without
+  // throwing and extract exactly the two direct includes — the nested
+  // 'add fuel' include (two levels deep, inside the skipped 'drive vehicle'
+  // step) is a documented limitation, not extracted.
+  it('does not throw on the real Use Case Usage Example idioms, extracting only the direct includes', () => {
+    const model = parseSysml(`sysml-v2
+package 'Use Case Usage Example' {
+  use case 'provide transportation' : 'Provide Transportation' {
+    subject vehicle;
+
+    first start;
+
+    then include use case 'enter vehicle' : 'Enter Vehicle' {
+      subject vehicle;
+      actor driver = 'provide transportation'::driver;
+    }
+
+    then use case 'drive vehicle' {
+      subject vehicle;
+      include 'add fuel'[0..*] {
+        subject vehicle;
+        actor fueler = driver;
+      }
+    }
+
+    then include use case 'exit vehicle' : 'Exit Vehicle' {
+      subject vehicle;
+    }
+
+    then done;
+  }
+
+  use case 'add fuel' {
+    subject vehicle : Vehicle;
+    actor fueler : Person;
+  }
+}`);
+    expect(model.definitions.map((d) => d.name)).toEqual(['provide transportation', 'add fuel']);
+    expect(model.traceability).toEqual([
+      { kind: 'include', source: 'provide transportation', target: 'Enter Vehicle' },
+      { kind: 'include', source: 'provide transportation', target: 'Exit Vehicle' },
+    ]);
+  });
 });

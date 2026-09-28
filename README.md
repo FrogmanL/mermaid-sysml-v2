@@ -3,17 +3,18 @@
 An external [Mermaid](https://mermaid.js.org) diagram plugin that renders a
 subset of the [SysML v2](https://www.omg.org/spec/SysMLv2/) textual notation
 — `part def`, `port def`, `interface def`, `connection def`, `requirement def`,
-`attribute def`, `enum def`, every connector-establishing form this subset
-resolves, specialization (`:>`)/subsetting (`:>`)/redefinition (`:>>`), and
-requirement traceability (`satisfy`/`verify`/`trace`/`allocate`, plus
-requirement derivation) —
+`attribute def`, `enum def`, `use case def`, every connector-establishing
+form this subset resolves, specialization (`:>`)/subsetting (`:>`)/
+redefinition (`:>>`), and requirement/use-case traceability (`satisfy`/
+`verify`/`trace`/`allocate`/`include`, plus requirement derivation) —
 matching the OMG's own graphical notation as closely as this subset's scope
 allows: compartmented definition boxes, rounded usage boxes, a recursive
 composition tree for plain containment, an internal-block-diagram-style
 container with connector lines (binary, `::>`-bound, or n-ary) where a part's
 containment also has connectors, a hollow-triangle generalization arrow
-between two definition boxes that specialize one another, and dashed
-dependency arrows for requirement traceability.
+between two definition boxes that specialize one another, dashed dependency
+arrows for requirement/use-case traceability, and stick-figure actors with a
+plain association line for use cases.
 
 ## Why this exists
 
@@ -149,6 +150,36 @@ covers:
     reach (a multi-segment instance path like `by bvm.coinAcceptor`, as
     `examples/bvm.mmd` itself uses throughout, does not resolve to a box
     today).
+- **Use cases** — a subset of the spec's separate **Use Case Diagram**
+  notation, grounded against the OMG's own training corpus
+  (`Systems-Modeling/SysML-v2-Release/sysml/src/training/"35. Use Cases"`):
+  - `use case def Name [:> Super] { subject s [: Type]; actor a [: Type]; objective { doc ...; } }`
+    — a leaf box stereotyped «use case def», with a "subject" compartment;
+    `objective`'s doc text is folded into the box's tooltip alongside any of
+    its own. `require constraint`-style bodies aren't part of use cases, but
+    other unrecognized members are skipped resiliently as usual.
+  - A bare `use case name [: Type] { ... }` **usage** — stereotyped «use
+    case», always kept even body-less, same rationale as a requirement
+    usage: `include` needs a box to point at.
+  - **Actors** — each `actor` member draws as a small stick-figure icon
+    beside the box (in a column, one per actor) with a plain, undirected
+    association line to it — the one piece of this diagram type's notation
+    that isn't just a compartment, matching the spec's actual convention
+    rather than a text-list shortcut. A usage's `actor x = existingActor;`
+    (redefining an inherited actor by reference, rather than giving it a
+    fresh type) shows as `x = existingActor` on the icon's label.
+  - **`include`** — `include use case [name] [: Target] { ... };` (full
+    form) or the shorthand `include name[multiplicity] { ... };` (the bare
+    name itself is the target) — a dashed «include» dependency arrow from
+    the including use case to the included one. A leading `then` (real
+    usages idiomatically chain their steps this way) is consumed and
+    discarded. Deliberately **out of scope for this round**: the `first`/
+    `then`/`done`/`decide`/`fork`/`join` activity-style control-flow
+    vocabulary a use case usage's body can otherwise contain, and a bare
+    nested `use case` step (no `include` keyword) — both are really
+    activity/behavior composition riding on top of use cases, not a
+    use-case-diagram relationship, and are earmarked for the activity-
+    diagram work instead (see "Extending this").
 - `doc /* ... */` comments (shown as a hover tooltip on the box).
 - `import` statements and quoted (`'...'`) identifiers (parsed/tokenized
   correctly, then ignored).
@@ -168,12 +199,17 @@ arrowheads/labels) against the OMG's own
 [Intro to the SysML v2 Language — Graphical Notation](https://github.com/Systems-Modeling/SysML-v2-Release/blob/master/doc/Intro%20to%20the%20SysML%20v2%20Language-Graphical%20Notation.pdf)
 deck — specifically its structural modules (pages 16–47: "Packages & Element
 Names," "Definition Elements," "Usage Elements," "Part Decomposition," "Part
-Interconnection," "Variability"). The requirement/traceability support above
+Interconnection," "Variability"). The requirement-traceability support above
 is *not* checked against that deck's own Requirement Diagram notation
 (page 48 on, a distinct visual language of its own); it reuses this subset's
 existing compartmented-box and dependency-arrow conventions instead, which is
 close in spirit but not a verified match to the spec's dedicated requirement
-box style. Everything else from page 48 on (behavior, use-case notation) is
+box style. The use-case support's stick-figure actors and association lines
+*are* the spec's actual convention (a well-established, stable part of the
+UML/SysML visual language, not something this subset invented), but the
+use-case box's own compartmented-rectangle style — like the requirement
+box — wasn't independently checked against this deck's own Use Case Diagram
+pages. Everything else from page 48 on (remaining behavior notation) is
 still out of scope here.
 
 Checked textual-syntax coverage against real `.sysml` files (read locally
@@ -187,7 +223,14 @@ during development, not vendored into this repo except where noted) from:
   `sysml.library/Systems Library/*.sysml` in the same repo is the standard
   library itself (`Parts.sysml`, `Ports.sysml`, etc.) rather than example
   models — useful for confirming exact library-defined keywords, less so
-  as realistic usage to parse against.
+  as realistic usage to parse against. Its `training/"35. Use Cases"`
+  directory (`Use Case Definition Example.sysml`, `Use Case Usage Example.sysml`)
+  is what grounded `use case def`/usage/`actor`/`include`; its
+  `training/"14. Action Definitions"` through `"22. Opaque Actions"` (action
+  defs, succession, conditional succession, decision/fork/join/merge) was
+  read to scope the activity-diagram work this subset still defers (see
+  "Extending this") — real action bodies need actual flowchart nodes and
+  edges, not the compartmented-box style this subset already has.
 - **[GfSE/SysML-v2-Models](https://github.com/GfSE/SysML-v2-Models)** — a
   community-curated collection (Gesellschaft für Systems Engineering),
   ranging from simple (`example_family/family.sysml`) to genuinely advanced.
@@ -275,6 +318,26 @@ during development, not vendored into this repo except where noted) from:
   `part def`'s body is skipped structurally rather than rendered as its own
   box (see `parsePartBody` in `src/parser/parser.ts`). Not seen nested in
   the corpus so far, but worth knowing if a real model does this.
+- **A use case's `include` target must match a box by its own declared
+  name, not by resolving through a usage's type.** `include use case
+  'enter vehicle' : 'Enter Vehicle';` looks for a box literally named
+  `Enter Vehicle` (a `use case def` or a usage that happens to share that
+  exact name) — a sibling usage named `'enter vehicle'` (lowercase, typed
+  `: 'Enter Vehicle'`) is a *different* name and won't match. This mirrors
+  the same "simple name only" resolution every other dependency arrow uses.
+- **A use case usage's `first`/`then`/`done` control-flow and any bare
+  nested `use case` step are skipped structurally, not just deprioritized.**
+  Only an explicit `include` (optionally `then`-prefixed) is extracted as a
+  relationship. In the OMG's own `Use Case Usage Example.sysml`, this means
+  an `include` nested two levels deep — inside a `then use case 'drive
+  vehicle' { ... }` step that itself isn't modeled — is lost; only includes
+  declared directly in a use case's own body are found (see
+  `examples/features/11-use-cases.mmd`'s doc comment for the trimmed
+  version of that exact case).
+- **A use case box's own bounding rect (used by cross-box arrows) includes
+  its actor column**, not just the compartmented rectangle — an
+  include/specialization/derive arrow pointing at a use case with actors
+  may anchor closer to the actor column than to the box itself.
 
 ## Usage
 
@@ -323,9 +386,9 @@ statements draw an arrow — see "Known limitations" — and its `Product`/
 one small file per feature cluster (definition/usage styling, the
 composition tree, the connector container, nested packages, resilience
 against unsupported constructs, every connector form, specialization
-arrows/subsets/redefines, requirements/traceability, and attribute def/enum
-def) for a quick visual tour of the whole plugin; `index.html`'s dropdown has
-a "Feature showcase" group listing them all.
+arrows/subsets/redefines, requirements/traceability, attribute def/enum def,
+and use cases) for a quick visual tour of the whole plugin; `index.html`'s
+dropdown has a "Feature showcase" group listing them all.
 
 ## Development
 
@@ -349,28 +412,41 @@ Natural next steps, roughly in order of value:
    the single highest-value item now, since it's the gap between "the
    flagship real-world example parses" and "the flagship real-world example
    actually shows its traceability."
-2. **Recursive containment for the connector container**, not just the
+2. **Activity/action diagrams** — `action def`/usage with `in`/`out`
+   parameters, nested action containment, and the control-flow vocabulary
+   real action bodies use (`first`/`then` succession, guarded succession,
+   `decide`/merge, `fork`/`join`, `loop`/`until`, `done`) — grounded against
+   the OMG's own training corpus (see "Validation corpus"). This needs an
+   actual flowchart renderer (start/end circles, decision/merge diamonds,
+   fork/join bars, action boxes, control-flow edges), not an extension of
+   the compartmented-box style everything else here uses — a genuinely new
+   rendering subsystem, comparable in size to everything built so far. Use
+   cases share the same `first`/`then`/`done` vocabulary for sequencing
+   their steps (see "Known limitations"), so this would likely let a future
+   round also resolve a use case's nested/`then`-chained steps, not just
+   its direct `include` members.
+3. **Recursive containment for the connector container**, not just the
    composition tree — the tree already recurses (see "Scope" above); a child
    inside an IBD-style container whose own type has further containment and
    connectors currently just shows as a plain box with ports instead of
    expanding.
-3. **Real edge routing for the specialization/dependency arrows**, instead of
+4. **Real edge routing for the specialization/dependency arrows**, instead of
    a straight line clipped to each box's border — would fix the visual
    crossing noted in "Known limitations" for a dense grid layout.
-4. **A subsetting/redefinition arrow between two usages**, distinct from the
+5. **A subsetting/redefinition arrow between two usages**, distinct from the
    definition-level specialization arrow already drawn — the spec shows this
    as a separate dashed relationship line.
-5. **Requirement body constructs** — `require constraint`/`assume
+6. **Requirement body constructs** — `require constraint`/`assume
    constraint`/`objective`/`stakeholder`, and inline requirement text shown
    in the box itself rather than only as a hover tooltip (would need real
-   text wrapping — see item 7).
-6. **Hollow diamond for a reference (non-owning) containment**, contrasted
+   text wrapping — see item 8).
+7. **Hollow diamond for a reference (non-owning) containment**, contrasted
    with the filled diamond already drawn for composition.
-7. **Real text measurement** — the renderer currently estimates box width
+8. **Real text measurement** — the renderer currently estimates box width
    from character counts; swapping in `getBBox()`-based measurement (as
    mermaid's own class diagram does) would tighten box sizing and enable
-   wrapping long requirement text (see item 5).
-8. Publishing to npm and registering in Mermaid's
+   wrapping long requirement text (see item 6).
+9. Publishing to npm and registering in Mermaid's
    [community integrations list](https://mermaid.js.org/ecosystem/integrations-community.html),
    and linking this project from the GitHub issue, once it's further along.
 

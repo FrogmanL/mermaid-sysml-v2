@@ -18,6 +18,8 @@ import type {
   SysmlModel,
   TraceabilityNode,
   TypeRelation,
+  UseCaseActorNode,
+  UseCaseDefNode,
 } from './ast.js';
 
 export class SysmlParseError extends Error {}
@@ -884,6 +886,170 @@ function parseTraceOrAllocate(p: ParserState, kind: 'trace' | 'allocate'): Trace
   return { kind, source, target };
 }
 
+/**
+ * `actor name [: Type] [multiplicity];` (def form) or
+ * `actor name = existingActor;` (usage form, redefining an inherited actor
+ * by reference). Multiplicity is parsed (so it doesn't derail the rest of
+ * the statement) but not kept — see `UseCaseActorNode`.
+ */
+function parseUseCaseActor(p: ParserState): UseCaseActorNode {
+  p.expect('actor');
+  const name = p.advance().value;
+  const { type } = parseOptionalTypeAndMultiplicity(p);
+  let value: string | undefined;
+  if (p.at('=')) {
+    p.advance();
+    value = parseRawUntil(p, [';']);
+  }
+  if (p.at(';')) p.advance();
+  return { name, type, value };
+}
+
+/** `objective [name] { doc /* ... *\/ }` inside a `use case def` body — returns just the doc text, the actual goal statement. */
+function parseObjective(p: ParserState): string | undefined {
+  p.expect('objective');
+  if (p.atIdent()) p.advance(); // an optional name, not seen in corpus but harmless to allow
+  let text: string | undefined;
+  if (p.at('{')) {
+    p.advance();
+    for (;;) {
+      const doc = skipDocAndComments(p);
+      if (doc && !text) text = doc;
+      if (p.at('}')) {
+        p.advance();
+        break;
+      }
+      if (p.eof()) break;
+      skipUnknownMember(p);
+    }
+  } else if (p.at(';')) {
+    p.advance();
+  }
+  return text;
+}
+
+/**
+ * `include [use case] [localName] [: Target] [[multiplicity]] [{ ... }];` —
+ * both the full form (`include use case 'enter vehicle' : 'Enter Vehicle'`)
+ * and the shorthand (`include 'add fuel'[0..*]`, where the bare name itself
+ * is the target) resolve to the same thing here: the name of the use case
+ * being included. Any inline body (redefined subject/actors) is skipped
+ * structurally — this subset only extracts the relationship, not a nested
+ * usage's own redefinitions. Returns '' if nothing nameable was found (the
+ * caller skips pushing a relationship in that case).
+ */
+function parseUseCaseInclude(p: ParserState): string {
+  p.expect('include');
+  if (p.at('use') && p.peek(1).value === 'case') {
+    p.advance();
+    p.advance();
+  }
+  let localName: string | undefined;
+  let target: string | undefined;
+  if (p.atIdent()) {
+    localName = p.advance().value;
+  }
+  parseOptionalMultiplicity(p);
+  if (p.at(':>') || p.at(':')) {
+    p.advance();
+    target = parseQualifiedName(p);
+  }
+  if (p.at('{')) {
+    skipBalancedBraceBlock(p);
+    if (p.at(';')) p.advance();
+  } else if (p.at(';')) {
+    p.advance();
+  }
+  return target ?? localName ?? '';
+}
+
+/**
+ * Shared member loop for both `use case def Name { ... }` and a bare
+ * `use case name { ... }` usage. A leading `then` (the activity-style
+ * sequencing marker real use-case usages chain their steps with) is
+ * consumed and discarded — see `UseCaseDefNode`'s doc comment for why this
+ * subset doesn't model sequencing itself, only the `include` relationship
+ * that can follow it.
+ */
+function parseUseCaseBody(p: ParserState, def: UseCaseDefNode, traceability: TraceabilityNode[]): void {
+  p.expect('{');
+  for (;;) {
+    const doc = skipDocAndComments(p);
+    if (doc && !def.doc) def.doc = doc;
+    if (p.at('}')) {
+      p.advance();
+      break;
+    }
+    if (p.eof()) break;
+    if (p.at('then')) p.advance();
+    if (p.at('subject')) {
+      def.subject = parseRequirementSubject(p);
+      continue;
+    }
+    if (p.at('actor')) {
+      def.actors.push(parseUseCaseActor(p));
+      continue;
+    }
+    if (p.at('objective')) {
+      const text = parseObjective(p);
+      if (text) def.objective = text;
+      continue;
+    }
+    if (p.at('include')) {
+      const target = parseUseCaseInclude(p);
+      if (target) traceability.push({ kind: 'include', source: def.name, target });
+      continue;
+    }
+    // `first`/`done`/`decide`/`fork`/`join`/etc. control markers, and a bare
+    // nested `use case` step (activity-style behavior composition, not a
+    // use-case-diagram relationship) are out of scope for this round — see
+    // README and `UseCaseDefNode`'s doc comment.
+    skipUnknownMember(p);
+  }
+}
+
+function parseUseCaseDef(p: ParserState, traceability: TraceabilityNode[]): UseCaseDefNode {
+  p.expect('use');
+  p.expect('case');
+  p.expect('def');
+  const name = p.advance().value;
+  let superType: string | undefined;
+  if (p.at(':>') || p.at(':')) {
+    p.advance();
+    superType = parseQualifiedName(p);
+  }
+  const def: UseCaseDefNode = { kind: 'useCaseDef', name, superType, actors: [] };
+  if (p.at('{')) {
+    parseUseCaseBody(p, def, traceability);
+  } else if (p.at(';')) {
+    p.advance();
+  }
+  return def;
+}
+
+/**
+ * A bare top-level `use case name [: Type] { ... }` usage — always kept,
+ * even body-less, same rationale as a requirement usage: `include` needs a
+ * box to point at.
+ */
+function parseTopLevelUseCaseUsage(p: ParserState, traceability: TraceabilityNode[]): UseCaseDefNode | undefined {
+  p.expect('use');
+  p.expect('case');
+  if (!p.atIdent()) {
+    skipUnknownMember(p);
+    return undefined;
+  }
+  const name = p.advance().value;
+  const { type: usageType } = parseOptionalTypeAndMultiplicity(p);
+  const def: UseCaseDefNode = { kind: 'useCaseDef', name, isUsage: true, usageType, actors: [] };
+  if (p.at('{')) {
+    parseUseCaseBody(p, def, traceability);
+  } else if (p.at(';')) {
+    p.advance();
+  }
+  return def;
+}
+
 interface ParseContext {
   packageName?: string;
 }
@@ -935,6 +1101,15 @@ function parseMembers(
     }
     if (p.at('enum') && p.peek(1).value === 'def') {
       definitions.push(parseEnumDef(p));
+      continue;
+    }
+    if (p.at('use') && p.peek(1).value === 'case' && p.peek(2).value === 'def') {
+      definitions.push(parseUseCaseDef(p, traceability));
+      continue;
+    }
+    if (p.at('use') && p.peek(1).value === 'case' && p.peek(2).value !== 'def') {
+      const usage = parseTopLevelUseCaseUsage(p, traceability);
+      if (usage) definitions.push(usage);
       continue;
     }
     if (p.at('part') && p.peek(1).value !== 'def') {
