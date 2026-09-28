@@ -177,13 +177,18 @@ covers:
     name itself is the target) — a dashed «include» dependency arrow from
     the including use case to the included one. A leading `then` (real
     usages idiomatically chain their steps this way) is consumed and
-    discarded. Deliberately **out of scope for this round**: the `first`/
-    `then`/`done`/`decide`/`fork`/`join` activity-style control-flow
-    vocabulary a use case usage's body can otherwise contain, and a bare
-    nested `use case` step (no `include` keyword) — both are really
-    activity/behavior composition riding on top of use cases, not a
-    use-case-diagram relationship, and are earmarked for the activity-
-    diagram work instead (see "Extending this").
+    discarded.
+  - **A bare nested `use case [name] { ... }` step** (no `include` keyword —
+    a use case usage performing a sub-use-case as one of its steps) draws
+    the same «include» arrow *and* gets promoted to its own box, so a
+    step's own nested relationships have something to draw against.
+    Confirmed necessary against the OMG's own `Use Case Usage Example.sysml`:
+    `'drive vehicle'` is exactly this — a step declared nowhere else, whose
+    own nested `include 'add fuel'...` is two levels deep. Both now resolve.
+    Still out of scope: the `first`/`then`/`done`/`decide`/`fork`/`join`
+    activity-style *sequencing* between steps — the relationship each step
+    implies is captured, but not the order they run in (see "Known
+    limitations").
 - **Activity/action diagrams** — grounded against the OMG's own training
   corpus (`Systems-Modeling/SysML-v2-Release/sysml/src/training/
   "14. Action Definitions"` through `"17. Control"`):
@@ -388,15 +393,12 @@ during development, not vendored into this repo except where noted) from:
   exact name) — a sibling usage named `'enter vehicle'` (lowercase, typed
   `: 'Enter Vehicle'`) is a *different* name and won't match. This mirrors
   the same "simple name only" resolution every other dependency arrow uses.
-- **A use case usage's `first`/`then`/`done` control-flow and any bare
-  nested `use case` step are skipped structurally, not just deprioritized.**
-  Only an explicit `include` (optionally `then`-prefixed) is extracted as a
-  relationship. In the OMG's own `Use Case Usage Example.sysml`, this means
-  an `include` nested two levels deep — inside a `then use case 'drive
-  vehicle' { ... }` step that itself isn't modeled — is lost; only includes
-  declared directly in a use case's own body are found (see
-  `examples/features/11-use-cases.mmd`'s doc comment for the trimmed
-  version of that exact case).
+- **A use case usage's `first`/`then`/`done` control-flow markers are still
+  parsed past, not modeled.** A bare nested `use case` step and an explicit
+  `include` both draw as «include» relationships now (see "Scope" above),
+  but the *order* they run in — which one is first, which follow which —
+  isn't captured or shown; every step and include just becomes its own
+  arrow, independent of the others.
 - **A use case box's own bounding rect (used by cross-box arrows) includes
   its actor column**, not just the compartmented rectangle — an
   include/specialization/derive arrow pointing at a use case with actors
@@ -491,16 +493,17 @@ npm run build   # emits dist/mermaid-sysml-v2.core.mjs + .d.ts files
 
 Natural next steps, roughly in order of value:
 
-1. **Use cases resolving their nested/`then`-chained steps**, not just their
-   direct `include` members (see "Known limitations") — now that the
-   activity control-flow vocabulary is actually parsed (`decide`/`merge`/
-   `fork`/`join`/`loop`, succession, guards), reusing it for a use case
-   usage's own body is a much smaller lift than it was before that existed.
-2. **Sequence diagrams** — not scoped at all yet; the next diagram type to
+1. **Sequence diagrams** — not scoped at all yet; the next diagram type to
    ground against real examples (the OMG's own training corpus almost
    certainly has one, same as every other diagram kind here) before
    designing anything. Likely its own rendering concern again — lifelines
    and messages over time, not a flowchart or a compartmented box.
+2. **Order/sequencing between a use case's steps** — each `include`/nested
+   `use case` step now draws its own relationship (see "Scope" above), but
+   not the `first`/`then`/`done` order they actually run in. Reusing the
+   activity control-flow layout already built for actions is the likely
+   path here, once it's worth the cost of a second flowchart-shaped
+   rendering path for what's still fundamentally a use-case diagram.
 3. **Resolve a `by`/`to` traceability path through an instance's type**, not
    just a simple name — `examples/bvm.mmd`'s own `satisfy req001 by
    bvm.coinAcceptor;` needs this to ever draw an arrow: look up `bvm`'s

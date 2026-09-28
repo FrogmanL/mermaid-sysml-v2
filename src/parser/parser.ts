@@ -972,11 +972,15 @@ function parseUseCaseInclude(p: ParserState): string {
  * Shared member loop for both `use case def Name { ... }` and a bare
  * `use case name { ... }` usage. A leading `then` (the activity-style
  * sequencing marker real use-case usages chain their steps with) is
- * consumed and discarded — see `UseCaseDefNode`'s doc comment for why this
- * subset doesn't model sequencing itself, only the `include` relationship
- * that can follow it.
+ * consumed and discarded — this subset doesn't model sequencing itself,
+ * only the relationships a step implies (see `parseNestedUseCaseStep`).
  */
-function parseUseCaseBody(p: ParserState, def: UseCaseDefNode, traceability: TraceabilityNode[]): void {
+function parseUseCaseBody(
+  p: ParserState,
+  def: UseCaseDefNode,
+  definitions: DefinitionNode[],
+  traceability: TraceabilityNode[]
+): void {
   p.expect('{');
   for (;;) {
     const doc = skipDocAndComments(p);
@@ -1005,15 +1009,55 @@ function parseUseCaseBody(p: ParserState, def: UseCaseDefNode, traceability: Tra
       if (target) traceability.push({ kind: 'include', source: def.name, target });
       continue;
     }
-    // `first`/`done`/`decide`/`fork`/`join`/etc. control markers, and a bare
-    // nested `use case` step (activity-style behavior composition, not a
-    // use-case-diagram relationship) are out of scope for this round — see
-    // README and `UseCaseDefNode`'s doc comment.
+    if (p.at('use') && p.peek(1).value === 'case') {
+      parseNestedUseCaseStep(p, definitions, traceability, def.name);
+      continue;
+    }
+    // `first`/`done`/`decide`/`fork`/`join`/etc. control markers are still
+    // out of scope — the relationship a step implies is captured above, but
+    // the sequencing between steps isn't modeled. Skipped resiliently like
+    // any other unsupported member.
     skipUnknownMember(p);
   }
 }
 
-function parseUseCaseDef(p: ParserState, traceability: TraceabilityNode[]): UseCaseDefNode {
+/**
+ * A bare nested `use case [name] [: Type] { ... }` step inside another use
+ * case's body (real usages chain these with `then`, already consumed by
+ * `parseUseCaseBody` before this is called) — treated as an `include`-like
+ * relationship from the enclosing use case (`sourceName`) to this step, and
+ * promoted to its own top-level box so its own nested relationships have
+ * something to draw against. Confirmed necessary against the OMG's own
+ * `Use Case Usage Example.sysml`: `'drive vehicle'` is exactly this — a
+ * step with no separate `use case def`/usage declared elsewhere, whose own
+ * nested `include 'add fuel'...` would otherwise be unreachable (two levels
+ * deep, both structurally skipped).
+ */
+function parseNestedUseCaseStep(
+  p: ParserState,
+  definitions: DefinitionNode[],
+  traceability: TraceabilityNode[],
+  sourceName: string
+): void {
+  p.expect('use');
+  p.expect('case');
+  if (!p.atIdent()) {
+    skipUnknownMember(p);
+    return;
+  }
+  const name = p.advance().value;
+  const { type: usageType } = parseOptionalTypeAndMultiplicity(p);
+  const def: UseCaseDefNode = { kind: 'useCaseDef', name, isUsage: true, usageType, actors: [] };
+  if (p.at('{')) {
+    parseUseCaseBody(p, def, definitions, traceability);
+  } else if (p.at(';')) {
+    p.advance();
+  }
+  definitions.push(def);
+  traceability.push({ kind: 'include', source: sourceName, target: name });
+}
+
+function parseUseCaseDef(p: ParserState, definitions: DefinitionNode[], traceability: TraceabilityNode[]): UseCaseDefNode {
   p.expect('use');
   p.expect('case');
   p.expect('def');
@@ -1025,7 +1069,7 @@ function parseUseCaseDef(p: ParserState, traceability: TraceabilityNode[]): UseC
   }
   const def: UseCaseDefNode = { kind: 'useCaseDef', name, superType, actors: [] };
   if (p.at('{')) {
-    parseUseCaseBody(p, def, traceability);
+    parseUseCaseBody(p, def, definitions, traceability);
   } else if (p.at(';')) {
     p.advance();
   }
@@ -1037,7 +1081,11 @@ function parseUseCaseDef(p: ParserState, traceability: TraceabilityNode[]): UseC
  * even body-less, same rationale as a requirement usage: `include` needs a
  * box to point at.
  */
-function parseTopLevelUseCaseUsage(p: ParserState, traceability: TraceabilityNode[]): UseCaseDefNode | undefined {
+function parseTopLevelUseCaseUsage(
+  p: ParserState,
+  definitions: DefinitionNode[],
+  traceability: TraceabilityNode[]
+): UseCaseDefNode | undefined {
   p.expect('use');
   p.expect('case');
   if (!p.atIdent()) {
@@ -1048,7 +1096,7 @@ function parseTopLevelUseCaseUsage(p: ParserState, traceability: TraceabilityNod
   const { type: usageType } = parseOptionalTypeAndMultiplicity(p);
   const def: UseCaseDefNode = { kind: 'useCaseDef', name, isUsage: true, usageType, actors: [] };
   if (p.at('{')) {
-    parseUseCaseBody(p, def, traceability);
+    parseUseCaseBody(p, def, definitions, traceability);
   } else if (p.at(';')) {
     p.advance();
   }
@@ -1442,11 +1490,11 @@ function parseMembers(
       continue;
     }
     if (p.at('use') && p.peek(1).value === 'case' && p.peek(2).value === 'def') {
-      definitions.push(parseUseCaseDef(p, traceability));
+      definitions.push(parseUseCaseDef(p, definitions, traceability));
       continue;
     }
     if (p.at('use') && p.peek(1).value === 'case' && p.peek(2).value !== 'def') {
-      const usage = parseTopLevelUseCaseUsage(p, traceability);
+      const usage = parseTopLevelUseCaseUsage(p, definitions, traceability);
       if (usage) definitions.push(usage);
       continue;
     }

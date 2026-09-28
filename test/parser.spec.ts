@@ -739,7 +739,13 @@ use case def Derived :> Base;`);
   // throwing and extract exactly the two direct includes — the nested
   // 'add fuel' include (two levels deep, inside the skipped 'drive vehicle'
   // step) is a documented limitation, not extracted.
-  it('does not throw on the real Use Case Usage Example idioms, extracting only the direct includes', () => {
+  // Regression: a bare nested `use case` step (no `include` keyword) used to
+  // be skipped structurally, along with everything inside it — losing
+  // 'drive vehicle' entirely and, two levels deep, its own
+  // `include 'add fuel'...`. Both are now extracted: the step itself
+  // becomes its own box (promoted to a top-level definition) and an
+  // include-like relationship from whichever use case contains it.
+  it('parses the real Use Case Usage Example end to end, including a step nested two levels deep', () => {
     const model = parseSysml(`sysml-v2
 package 'Use Case Usage Example' {
   use case 'provide transportation' : 'Provide Transportation' {
@@ -772,9 +778,18 @@ package 'Use Case Usage Example' {
     actor fueler : Person;
   }
 }`);
-    expect(model.definitions.map((d) => d.name)).toEqual(['provide transportation', 'add fuel']);
+    expect(model.definitions.map((d) => d.name)).toEqual([
+      'drive vehicle',
+      'provide transportation',
+      'add fuel',
+    ]);
+    const driveVehicle = model.definitions.find((d) => d.name === 'drive vehicle');
+    if (driveVehicle?.kind !== 'useCaseDef') throw new Error('expected useCaseDef');
+    expect(driveVehicle.isUsage).toBe(true);
     expect(model.traceability).toEqual([
       { kind: 'include', source: 'provide transportation', target: 'Enter Vehicle' },
+      { kind: 'include', source: 'drive vehicle', target: 'add fuel' },
+      { kind: 'include', source: 'provide transportation', target: 'drive vehicle' },
       { kind: 'include', source: 'provide transportation', target: 'Exit Vehicle' },
     ]);
   });

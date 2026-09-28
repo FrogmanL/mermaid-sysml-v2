@@ -513,6 +513,24 @@ use case def 'Enter Vehicle';`);
     expect(svgEl.querySelector('text.dependency-label')?.textContent).toBe('«include»');
   });
 
+  it('draws a box and an include arrow for a bare nested use case step, and resolves its own nested include', () => {
+    db.parse(`sysml-v2
+use case 'provide transportation' {
+  then use case 'drive vehicle' {
+    include 'add fuel'[0..*];
+  }
+}
+use case 'add fuel';`);
+    select(document.body).append('svg').attr('id', 'sysml-test-31b');
+    draw('', 'sysml-test-31b', '0.0.0');
+
+    const svgEl = document.querySelector('#sysml-test-31b')!;
+    // provide transportation -> drive vehicle, and drive vehicle -> add fuel.
+    expect(svgEl.querySelectorAll('line.dependency-line').length).toBe(2);
+    const driveVehicleNode = findNodeByTitle(svgEl, 'drive vehicle');
+    expect(driveVehicleNode.querySelector(':scope > .stereotype')?.textContent).toBe('«use case»');
+  });
+
   it('draws an action flowchart: start circle, action nodes, done circle, and solid succession arrows', () => {
     db.parse(`sysml-v2
 action def TakePicture {
