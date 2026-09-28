@@ -127,10 +127,65 @@ export interface ConnectionDefNode {
   attributes: AttributeNode[];
 }
 
-export type DefinitionNode = PartDefNode | PortDefNode | InterfaceDefNode | ConnectionDefNode;
+export interface RequirementSubjectNode {
+  name: string;
+  type?: string;
+}
+
+/**
+ * `requirement def Name [:> Super] { doc ...; subject name [: Type]; }`, or
+ * a bare `requirement name [: Type] [:> derivedFrom];` usage. SysML v2 has
+ * no standalone `deriveReqt` keyword in the textual grammar — requirement
+ * derivation is modeled as ordinary usage subsetting instead (confirmed
+ * against `examples/bvm.mmd`'s own `requirement req004 : ProductDispensingReq
+ * :> req012;`), so `usageType` (the `:` instantiated def) and `derivedFrom`
+ * (the `:>` narrowed usage) are kept as two separate fields rather than
+ * reusing `type`/`typeKind` — that combo is exactly the one case those
+ * generic fields can't hold at once (see `PartUsageNode`'s doc comment).
+ * Unlike other usage kinds, a requirement usage always gets its own box even
+ * when body-less, since satisfy/verify/trace/allocate/derive need something
+ * to point at — a bare `requirement req001 : CoinPaymentReq;` is the norm,
+ * not an edge case, for requirement usages specifically.
+ */
+export interface RequirementDefNode {
+  kind: 'requirementDef';
+  name: string;
+  isUsage?: boolean;
+  usageType?: string;
+  derivedFrom?: string;
+  /** Definition only: supertype after `:>` (specialization). */
+  superType?: string;
+  doc?: string;
+  subject?: RequirementSubjectNode;
+}
+
+/**
+ * A top-level cross-cutting traceability statement: `satisfy req by x;`,
+ * `verify req by x;`, `trace a to b;`, `allocate a to b;`. Only `satisfy` is
+ * confirmed against a real corpus file (`examples/bvm.mmd`); `verify`/
+ * `trace`/`allocate` follow the same grammar shape per the SysML v2 spec but
+ * haven't turned up in a local example yet. `source`/`target` are raw
+ * dotted paths (see `parseFeaturePath`) — only a simple name matching a box
+ * in the diagram resolves to a drawn arrow (see renderer's "Known
+ * limitations"): a multi-segment instance path like `bvm.coinAcceptor`
+ * usually won't.
+ */
+export interface TraceabilityNode {
+  kind: 'satisfy' | 'verify' | 'trace' | 'allocate';
+  source: string;
+  target: string;
+}
+
+export type DefinitionNode =
+  | PartDefNode
+  | PortDefNode
+  | InterfaceDefNode
+  | ConnectionDefNode
+  | RequirementDefNode;
 
 export interface SysmlModel {
   packageName?: string;
   doc?: string;
   definitions: DefinitionNode[];
+  traceability: TraceabilityNode[];
 }

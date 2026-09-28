@@ -1,7 +1,7 @@
 import { parseSysml } from './parser/parser.js';
 import type { SysmlModel } from './parser/ast.js';
 
-let model: SysmlModel = { definitions: [] };
+let model: SysmlModel = { definitions: [], traceability: [] };
 let accTitle = '';
 let accDescription = '';
 let diagramTitle = '';
@@ -28,7 +28,7 @@ export const setDiagramTitle = (txt: string): void => {
 };
 
 export const clear = (): void => {
-  model = { definitions: [] };
+  model = { definitions: [], traceability: [] };
   accTitle = '';
   accDescription = '';
   diagramTitle = '';

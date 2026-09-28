@@ -334,4 +334,73 @@ part def Device;`);
     const lines = Array.from(connNode.querySelectorAll('.member')).map((el) => el.textContent);
     expect(lines).toEqual(expect.arrayContaining(['hub : Hub', 'device : Device', 'bandwidth : Real']));
   });
+
+  it('renders a requirement def («requirement def», subject compartment) and a requirement usage («requirement», "name : Type")', () => {
+    db.parse(`sysml-v2
+requirement def CoinPaymentReq {
+  subject sys001 : CoinAcceptor;
+}
+requirement req001 : CoinPaymentReq;
+part def CoinAcceptor;`);
+    select(document.body).append('svg').attr('id', 'sysml-test-19');
+    draw('', 'sysml-test-19', '0.0.0');
+
+    const defNode = findNodeByTitle(document.querySelector('#sysml-test-19')!, 'CoinPaymentReq');
+    expect(defNode.querySelector(':scope > .stereotype')?.textContent).toBe('«requirement def»');
+    expect(Array.from(defNode.querySelectorAll('.member')).map((el) => el.textContent)).toContain(
+      'sys001 : CoinAcceptor'
+    );
+
+    const usageNode = findNodeByTitle(document.querySelector('#sysml-test-19')!, 'req001 : CoinPaymentReq');
+    expect(usageNode.querySelector(':scope > .stereotype')?.textContent).toBe('«requirement»');
+  });
+
+  it('draws a satisfy dependency arrow from the satisfying element to the requirement when both resolve to a box', () => {
+    db.parse(`sysml-v2
+requirement req001 : CoinPaymentReq;
+part def CoinAcceptor;
+satisfy req001 by CoinAcceptor;`);
+    select(document.body).append('svg').attr('id', 'sysml-test-20');
+    draw('', 'sysml-test-20', '0.0.0');
+
+    const svgEl = document.querySelector('#sysml-test-20')!;
+    expect(svgEl.querySelectorAll('line.dependency-line').length).toBe(1);
+    expect(svgEl.querySelectorAll('polyline.dependency-arrowhead').length).toBe(1);
+    expect(svgEl.querySelector('text.dependency-label')?.textContent).toBe('«satisfy»');
+  });
+
+  it('skips the satisfy arrow when the by-target is a multi-segment path that has no box of its own', () => {
+    db.parse(`sysml-v2
+requirement req001 : CoinPaymentReq;
+satisfy req001 by bvm.coinAcceptor;`);
+    select(document.body).append('svg').attr('id', 'sysml-test-21');
+    draw('', 'sysml-test-21', '0.0.0');
+
+    expect(document.querySelectorAll('#sysml-test-21 line.dependency-line').length).toBe(0);
+  });
+
+  it('draws a «derive» dependency arrow for a requirement usage\'s :> derivation, from the derived usage to the general one', () => {
+    db.parse(`sysml-v2
+requirement req012 : NoUnpaidDispensingReq;
+requirement req004 : ProductDispensingReq :> req012;`);
+    select(document.body).append('svg').attr('id', 'sysml-test-22');
+    draw('', 'sysml-test-22', '0.0.0');
+
+    const svgEl = document.querySelector('#sysml-test-22')!;
+    expect(svgEl.querySelectorAll('line.dependency-line').length).toBe(1);
+    expect(svgEl.querySelector('text.dependency-label')?.textContent).toBe('«derive»');
+  });
+
+  it('renders the real BVM requirements package end to end without throwing, including its satisfy statements', () => {
+    db.parse(bvmSource);
+    select(document.body).append('svg').attr('id', 'sysml-test-23');
+
+    expect(() => draw('', 'sysml-test-23', '0.0.0')).not.toThrow();
+    // Every satisfy `by` target in bvm.mmd is a multi-segment instance path
+    // (`bvm.coinAcceptor`), which this subset doesn't resolve to a box (see
+    // README "Known limitations") — so no dependency arrows are expected
+    // here, only that parsing/rendering the real file doesn't break.
+    const req001Node = findNodeByTitle(document.querySelector('#sysml-test-23')!, 'req001 : CoinPaymentReq');
+    expect(req001Node.querySelector(':scope > .stereotype')?.textContent).toBe('«requirement»');
+  });
 });

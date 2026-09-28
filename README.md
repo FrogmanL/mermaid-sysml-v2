@@ -2,15 +2,17 @@
 
 An external [Mermaid](https://mermaid.js.org) diagram plugin that renders a
 subset of the [SysML v2](https://www.omg.org/spec/SysMLv2/) textual notation
-— `part def`, `port def`, `interface def`, `connection def`, every
-connector-establishing form this subset resolves, and specialization
-(`:>`)/subsetting (`:>`)/redefinition (`:>>`) — matching the OMG's own
-graphical notation as closely as this subset's scope allows: compartmented
-definition boxes, rounded usage boxes, a recursive composition tree for plain
-containment, an internal-block-diagram-style container with connector lines
-(binary, `::>`-bound, or n-ary) where a part's containment also has
-connectors, and a hollow-triangle generalization arrow between two definition
-boxes that specialize one another.
+— `part def`, `port def`, `interface def`, `connection def`, `requirement def`,
+every connector-establishing form this subset resolves, specialization
+(`:>`)/subsetting (`:>`)/redefinition (`:>>`), and requirement traceability
+(`satisfy`/`verify`/`trace`/`allocate`, plus requirement derivation) —
+matching the OMG's own graphical notation as closely as this subset's scope
+allows: compartmented definition boxes, rounded usage boxes, a recursive
+composition tree for plain containment, an internal-block-diagram-style
+container with connector lines (binary, `::>`-bound, or n-ary) where a part's
+containment also has connectors, a hollow-triangle generalization arrow
+between two definition boxes that specialize one another, and dashed
+dependency arrows for requirement traceability.
 
 ## Why this exists
 
@@ -101,53 +103,50 @@ covers:
   `interface def` but for a plain part-to-part link with no port-compatibility
   requirement; renders the same way (a leaf box with "attributes"/"ends"
   compartments).
+- **Requirements & traceability** — a subset of the spec's separate
+  **Requirement Diagram** notation:
+  - `requirement def Name [:> Super] { doc ...; subject name [: Type]; }` —
+    a leaf box stereotyped «requirement def», with a "subject" compartment.
+    `require constraint`/`assume constraint`/`objective`/`stakeholder` and
+    other requirement-body constructs are out of scope, skipped resiliently
+    like any other unsupported member.
+  - A bare `requirement name [: Type] [:> derivedFrom];` **usage** — stereotyped
+    «requirement», header "name : Type". Unlike a part usage, this always
+    gets its own box even when body-less (the norm for a requirement usage),
+    since the relationships below need something to point at.
+  - **Requirement derivation** — SysML v2 has no standalone `deriveReqt`
+    keyword; derivation is ordinary usage subsetting (confirmed against
+    `examples/bvm.mmd`'s own
+    `requirement req004 : ProductDispensingReq :> req012;`, which combines an
+    instantiated type (`:`) and a derivation target (`:>`) on the same
+    usage — kept as two separate fields, `usageType` and `derivedFrom`, so
+    neither is lost). Drawn as a dashed «derive» arrow, tip at the more
+    general requirement, the same directional convention as specialization.
+  - `satisfy <req> by <target>;` and `verify <req> by <target>;` — a dashed
+    dependency arrow from `target` to `req` (the element depends on
+    fulfilling the requirement), labeled «satisfy»/«verify». Only `satisfy`
+    is confirmed against a real corpus file (`examples/bvm.mmd`, REQ-001
+    through REQ-013); `verify` follows the same grammar shape per spec.
+  - `trace <a> to <b>;` and `allocate <a> to <b>;` — the same dashed-arrow
+    shape, from `a` to `b`, labeled «trace»/«allocate». Neither is
+    corpus-confirmed yet; implemented from the spec's grammar, which mirrors
+    `satisfy`/`verify` closely enough that the same parser function handles
+    both keyword pairs.
+  - Every one of these dependency arrows resolves its endpoints by **simple
+    name only** — see "Known limitations" for what that does and doesn't
+    reach (a multi-segment instance path like `by bvm.coinAcceptor`, as
+    `examples/bvm.mmd` itself uses throughout, does not resolve to a box
+    today).
 - `doc /* ... */` comments (shown as a hover tooltip on the box).
 - `import` statements and quoted (`'...'`) identifiers (parsed/tokenized
   correctly, then ignored).
 
-Everything else — actions, requirements, state machines, views, `satisfy`,
-variability modeling (`variation`/`variant`), sequence-style `message ... to`
+Everything else — actions, state machines, views, `copy`, variability
+modeling (`variation`/`variant`), sequence-style `message ... to`
 interactions, port redefinition, expressions beyond a raw right-hand side —
 is outside this subset. The parser skips unrecognized constructs resiliently
 (structurally, brace-aware) rather than failing the whole diagram, so a real
 file mixing supported and unsupported constructs still renders what it can.
-
-## Requirements & traceability (a separate diagram, not covered here)
-
-SysML v2's requirements/traceability constructs — `requirement def`, a
-`requirement` usage bound to a `subject`, and the cross-cutting relationship
-keywords `satisfy ... by ...`, `verify`, `trace`, `allocate`, and `copy` —
-belong to a different diagram type from the ones above: the **Requirement
-Diagram**, with its own graphical notation (a compartmented requirement box
-showing id/text/subject, and dashed dependency arrows labeled
-«satisfy»/«verify»/«trace»/etc.), not the definition/usage/interconnection
-notation this subset renders. The OMG's own graphical-notation deck (see
-"Validation corpus" below) covers it starting at page 48 — already noted as
-out of scope in "Everything else" above.
-
-This subset already parses past these constructs structurally rather than
-failing, so a real model mixing them with supported constructs still renders
-what it can. `examples/bvm.mmd`'s own `requirement def`/`requirement`/
-`satisfy` section (REQ-001 through REQ-013, modeling the BVM's requirements
-and which parts satisfy them) is a real instance of exactly that — it parses
-cleanly, just contributes nothing to the diagram today. One thing worth
-noting from that file: **`deriveReqt` isn't a standalone keyword in the
-textual grammar.** SysML v2 models requirement derivation as ordinary usage
-subsetting instead —
-`requirement req004 : ProductDispensingReq :> req012;` — the same `:>`
-construct already covered under "Specialization, subsetting, and
-redefinition" above, not a distinct traceability relationship. So a future
-requirement-derivation arrow would reuse the same usage-level subsetting
-relationship this subset already parses today (see "Known limitations" — a
-usage's `:>`/`:>>` is currently shown as text only, with no arrow of its
-own yet).
-
-Adding requirement-diagram support would mean new parsing and rendering work
-of its own — a `requirement def`/`requirement` usage box (id + text +
-subject compartments, per the spec), and a dashed dependency-arrow renderer
-for `satisfy`/`verify`/`trace`/`allocate`/`copy`, each labeled with its own
-guillemet stereotype — rather than an extension of the definition/usage/
-connector/specialization rendering already built here.
 
 ### Validation corpus
 
@@ -157,8 +156,13 @@ arrowheads/labels) against the OMG's own
 [Intro to the SysML v2 Language — Graphical Notation](https://github.com/Systems-Modeling/SysML-v2-Release/blob/master/doc/Intro%20to%20the%20SysML%20v2%20Language-Graphical%20Notation.pdf)
 deck — specifically its structural modules (pages 16–47: "Packages & Element
 Names," "Definition Elements," "Usage Elements," "Part Decomposition," "Part
-Interconnection," "Variability"); everything from page 48 on is behavior/
-requirements/use-case notation, out of scope here.
+Interconnection," "Variability"). The requirement/traceability support above
+is *not* checked against that deck's own Requirement Diagram notation
+(page 48 on, a distinct visual language of its own); it reuses this subset's
+existing compartmented-box and dependency-arrow conventions instead, which is
+close in spirit but not a verified match to the spec's dedicated requirement
+box style. Everything else from page 48 on (behavior, use-case notation) is
+still out of scope here.
 
 Checked textual-syntax coverage against real `.sysml` files (read locally
 during development, not vendored into this repo except where noted) from:
@@ -187,7 +191,10 @@ during development, not vendored into this repo except where noted) from:
 - `examples/bvm.mmd` — not a found/published example; an LLM-generated
   model from an earlier session on the user's own MBSE project (its header
   comment says so), used here because it's real containment/connector usage
-  the user actually produced, not because it's a citable outside source.
+  the user actually produced, not because it's a citable outside source. Its
+  own `BVMRequirements` package (REQ-001 through REQ-013) is also what drove
+  this subset's requirements/traceability support — including the discovery
+  that `deriveReqt` isn't a real keyword.
 
 **Known limitations**, in rough order of how often they'd bite:
 
@@ -230,6 +237,26 @@ during development, not vendored into this repo except where noted) from:
   combining a defining type with a subsets/redefines target on the same
   declaration (`part x : Type :> base;`) hasn't turned up in this subset's
   validation corpus; if it occurs, only the last relation parsed is kept.
+  (A `requirement` usage is the one exception — see "Scope" above, it keeps
+  both deliberately, since that combination is exactly what a real
+  requirement derivation looks like.)
+- **A traceability arrow's endpoints resolve by simple name only** — the
+  last segment of a `satisfy`/`verify`/`trace`/`allocate` path is matched
+  against a top-level box's own name, with no resolution through an
+  instance's type. `examples/bvm.mmd`'s own `satisfy req001 by
+  bvm.coinAcceptor;` doesn't draw an arrow today: `bvm` is a body-less
+  top-level usage (discarded, so its type is never recorded), and even if it
+  were, `coinAcceptor` names a *child inside* `BVM`'s own rendered box, not a
+  top-level one. `examples/features/09-requirements.mmd` demonstrates the
+  case that *does* resolve — a `by`/`to` target that's a plain top-level name.
+- **Dependency arrows sharing an endpoint fan out from its center** (so a
+  requirement with both a `satisfy` and a `verify` landing on it stays
+  legible) but otherwise use the same straight-line-to-border approach as the
+  specialization arrow, with the same crossing caveat in a dense layout.
+- `verify`/`trace`/`allocate` are implemented from the spec's grammar, not
+  confirmed against a real corpus file the way `satisfy` and requirement
+  derivation are (both evidenced in `examples/bvm.mmd`) — flag it if real
+  usage doesn't match.
 
 ## Usage
 
@@ -271,12 +298,15 @@ See `examples/vehicle.mmd` for the part/port/interface-def style (the example
 from the GitHub issue) and `examples/bvm.mmd` for the containment/connector
 style (a real beverage-vending-machine model — its `BVM` part shows the
 connector container, its `ControlUnit` part shows the composition tree, since
-it has containment but no connectors of its own). `examples/features/`
+it has containment but no connectors of its own, and its `BVMRequirements`
+package for requirements/traceability, though none of its `satisfy`
+statements draw an arrow — see "Known limitations"). `examples/features/`
 has one small file per feature cluster (definition/usage styling, the
 composition tree, the connector container, nested packages, resilience
-against unsupported constructs, every connector form, and specialization
-arrows/subsets/redefines) for a quick visual tour of the whole plugin;
-`index.html`'s dropdown has a "Feature showcase" group listing them all.
+against unsupported constructs, every connector form, specialization
+arrows/subsets/redefines, and requirements/traceability) for a quick visual
+tour of the whole plugin; `index.html`'s dropdown has a "Feature showcase"
+group listing them all.
 
 ## Development
 
@@ -291,23 +321,37 @@ npm run build   # emits dist/mermaid-sysml-v2.core.mjs + .d.ts files
 
 Natural next steps, roughly in order of value:
 
-1. **Recursive containment for the connector container**, not just the
+1. **Resolve a `by`/`to` traceability path through an instance's type**, not
+   just a simple name — `examples/bvm.mmd`'s own `satisfy req001 by
+   bvm.coinAcceptor;` needs this to ever draw an arrow: look up `bvm`'s
+   recorded type (currently discarded, since a body-less top-level part
+   usage has nothing else worth keeping today), then resolve `coinAcceptor`
+   as a child within that type's own rendered container/tree box. This is
+   the single highest-value item now, since it's the gap between "the
+   flagship real-world example parses" and "the flagship real-world example
+   actually shows its traceability."
+2. **Recursive containment for the connector container**, not just the
    composition tree — the tree already recurses (see "Scope" above); a child
    inside an IBD-style container whose own type has further containment and
    connectors currently just shows as a plain box with ports instead of
    expanding.
-2. **Real edge routing for the specialization arrow**, instead of a straight
-   line clipped to each box's border — would fix the visual crossing noted
-   in "Known limitations" for a dense grid layout.
-3. **A subsetting/redefinition arrow between two usages**, distinct from the
+3. **Real edge routing for the specialization/dependency arrows**, instead of
+   a straight line clipped to each box's border — would fix the visual
+   crossing noted in "Known limitations" for a dense grid layout.
+4. **A subsetting/redefinition arrow between two usages**, distinct from the
    definition-level specialization arrow already drawn — the spec shows this
    as a separate dashed relationship line.
-4. **Hollow diamond for a reference (non-owning) containment**, contrasted
+5. **Requirement body constructs** — `require constraint`/`assume
+   constraint`/`objective`/`stakeholder`, and inline requirement text shown
+   in the box itself rather than only as a hover tooltip (would need real
+   text wrapping — see item 7).
+6. **Hollow diamond for a reference (non-owning) containment**, contrasted
    with the filled diamond already drawn for composition.
-5. **Real text measurement** — the renderer currently estimates box width
+7. **Real text measurement** — the renderer currently estimates box width
    from character counts; swapping in `getBBox()`-based measurement (as
-   mermaid's own class diagram does) would tighten box sizing.
-6. Publishing to npm and registering in Mermaid's
+   mermaid's own class diagram does) would tighten box sizing and enable
+   wrapping long requirement text (see item 5).
+8. Publishing to npm and registering in Mermaid's
    [community integrations list](https://mermaid.js.org/ecosystem/integrations-community.html),
    and linking this project from the GitHub issue, once it's further along.
 

@@ -492,4 +492,82 @@ package Family {
 part def Person;`)
     ).not.toThrow();
   });
+
+  it('parses a requirement def with doc and subject', () => {
+    const model = parseSysml(`sysml-v2
+requirement def CoinPaymentReq {
+  doc /* REQ-001 — Coin Payment
+       * The BVM shall accept coins as a form of payment. */
+  subject sys001 : CoinAcceptor;
+}`);
+    const def = model.definitions[0];
+    if (def.kind !== 'requirementDef') throw new Error('expected requirementDef');
+    expect(def.isUsage).toBeUndefined();
+    expect(def.doc).toContain('Coin Payment');
+    expect(def.subject).toEqual({ name: 'sys001', type: 'CoinAcceptor' });
+  });
+
+  it('keeps a bare body-less requirement usage (unlike a part usage, which is discarded)', () => {
+    const model = parseSysml(`sysml-v2
+requirement def CoinPaymentReq;
+requirement req001 : CoinPaymentReq;`);
+    expect(model.definitions.map((d) => d.name)).toEqual(['CoinPaymentReq', 'req001']);
+    const req001 = model.definitions.find((d) => d.name === 'req001');
+    if (req001?.kind !== 'requirementDef') throw new Error('expected requirementDef');
+    expect(req001.isUsage).toBe(true);
+    expect(req001.usageType).toBe('CoinPaymentReq');
+  });
+
+  // Regression: found against examples/bvm.mmd's own
+  // `requirement req004 : ProductDispensingReq :> req012;` — SysML v2 has no
+  // standalone `deriveReqt` keyword, so derivation is modeled as ordinary
+  // usage subsetting. This combines a `:` type AND a `:>` relation on the
+  // SAME usage, which is exactly the combo the generic part-usage
+  // `type`/`typeKind` fields can't hold at once — requirement usages keep
+  // them as two separate fields (`usageType`/`derivedFrom`) specifically so
+  // this doesn't lose one or the other.
+  it('parses a requirement usage combining an instantiated type (:) and a derivation target (:>)', () => {
+    const model = parseSysml(`sysml-v2
+requirement req012 : NoUnpaidDispensingReq;
+requirement req004 : ProductDispensingReq :> req012;`);
+    const req004 = model.definitions.find((d) => d.name === 'req004');
+    if (req004?.kind !== 'requirementDef') throw new Error('expected requirementDef');
+    expect(req004.usageType).toBe('ProductDispensingReq');
+    expect(req004.derivedFrom).toBe('req012');
+  });
+
+  it('parses a top-level satisfy statement', () => {
+    const model = parseSysml(`sysml-v2
+requirement req001 : CoinPaymentReq;
+satisfy req001 by bvm.coinAcceptor;`);
+    expect(model.traceability).toEqual([{ kind: 'satisfy', source: 'req001', target: 'bvm.coinAcceptor' }]);
+  });
+
+  it('parses verify/trace/allocate with the same shape as satisfy', () => {
+    const model = parseSysml(`sysml-v2
+verify req001 by testCase1;
+trace req001 to designDoc;
+allocate softwareModule to controlUnit;`);
+    expect(model.traceability).toEqual([
+      { kind: 'verify', source: 'req001', target: 'testCase1' },
+      { kind: 'trace', source: 'req001', target: 'designDoc' },
+      { kind: 'allocate', source: 'softwareModule', target: 'controlUnit' },
+    ]);
+  });
+
+  it('parses the real BVM requirements package end to end: defs, usages, derivation, and satisfy', () => {
+    const model = parseSysml(bvmSource);
+    const names = model.definitions.map((d) => d.name);
+    expect(names).toContain('CoinPaymentReq');
+    expect(names).toContain('req001');
+    expect(names).toContain('req004');
+
+    const req004 = model.definitions.find((d) => d.name === 'req004');
+    if (req004?.kind !== 'requirementDef') throw new Error('expected requirementDef');
+    expect(req004.usageType).toBe('ProductDispensingReq');
+    expect(req004.derivedFrom).toBe('req012');
+
+    expect(model.traceability).toHaveLength(13);
+    expect(model.traceability[0]).toEqual({ kind: 'satisfy', source: 'req001', target: 'bvm.coinAcceptor' });
+  });
 });

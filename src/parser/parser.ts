@@ -11,7 +11,10 @@ import type {
   PortDefNode,
   PortFieldNode,
   PortRefNode,
+  RequirementDefNode,
+  RequirementSubjectNode,
   SysmlModel,
+  TraceabilityNode,
   TypeRelation,
 } from './ast.js';
 
@@ -687,11 +690,125 @@ function parseConnectionDef(p: ParserState): ConnectionDefNode {
   return def;
 }
 
+/** `subject name [: Type];` inside a `requirement def` body. */
+function parseRequirementSubject(p: ParserState): RequirementSubjectNode {
+  p.expect('subject');
+  const name = p.advance().value;
+  let type: string | undefined;
+  if (p.at(':>') || p.at(':')) {
+    p.advance();
+    type = parseQualifiedName(p);
+  }
+  if (p.at(';')) p.advance();
+  return { name, type };
+}
+
+function parseRequirementDef(p: ParserState): RequirementDefNode {
+  p.expect('requirement');
+  p.expect('def');
+  const name = p.advance().value;
+  let superType: string | undefined;
+  if (p.at(':>') || p.at(':')) {
+    p.advance();
+    superType = parseQualifiedName(p);
+  }
+  const def: RequirementDefNode = { kind: 'requirementDef', name, superType };
+  if (p.at('{')) {
+    p.advance();
+    for (;;) {
+      const doc = skipDocAndComments(p);
+      if (doc && !def.doc) def.doc = doc;
+      if (p.at('}')) {
+        p.advance();
+        break;
+      }
+      if (p.eof()) break;
+      if (p.at('subject')) {
+        def.subject = parseRequirementSubject(p);
+        continue;
+      }
+      // `require constraint`, `assume constraint`, `objective`,
+      // `stakeholder`, and other requirement-body constructs are outside
+      // this subset — skip resiliently, same as any other unsupported
+      // member.
+      skipUnknownMember(p);
+    }
+  } else if (p.at(';')) {
+    p.advance();
+  }
+  return def;
+}
+
+/**
+ * A bare top-level `requirement name [: Type] [:> derivedFrom];` usage —
+ * always kept, even body-less (the norm here, unlike a part usage), since
+ * satisfy/verify/trace/allocate/derive need a box to point at. `:` (which
+ * def this instantiates) and `:>` (which usage this one derives from/
+ * narrows) are independent and can both appear on the same usage — see
+ * `RequirementDefNode`'s doc comment for why they're kept as separate
+ * fields rather than the generic `type`/`typeKind` pattern.
+ */
+function parseTopLevelRequirementUsage(p: ParserState): RequirementDefNode {
+  p.expect('requirement');
+  const name = p.advance().value;
+  let usageType: string | undefined;
+  let derivedFrom: string | undefined;
+  for (;;) {
+    if (p.at(':>')) {
+      p.advance();
+      derivedFrom = parseQualifiedName(p);
+      continue;
+    }
+    if (usageType === undefined && p.at(':')) {
+      p.advance();
+      usageType = parseQualifiedName(p);
+      continue;
+    }
+    break;
+  }
+  const def: RequirementDefNode = { kind: 'requirementDef', name, isUsage: true, usageType, derivedFrom };
+  if (p.at('{')) {
+    // A requirement usage's inline body (redefined subject, nested
+    // satisfy/require, etc.) is outside this subset's rendering depth —
+    // skip it structurally, same as a part usage's inline body.
+    skipBalancedBraceBlock(p);
+    if (p.at(';')) p.advance();
+  } else if (p.at(';')) {
+    p.advance();
+  }
+  return def;
+}
+
+/** `satisfy <req> by <target>;` / `verify <req> by <target>;` — the same shape, differing only in keyword. */
+function parseSatisfyOrVerify(p: ParserState, kind: 'satisfy' | 'verify'): TraceabilityNode {
+  p.advance();
+  const source = parseFeaturePath(p);
+  p.expect('by');
+  const target = parseFeaturePath(p);
+  if (p.at(';')) p.advance();
+  return { kind, source, target };
+}
+
+/** `trace <a> to <b>;` / `allocate <a> to <b>;` — the same shape, differing only in keyword. */
+function parseTraceOrAllocate(p: ParserState, kind: 'trace' | 'allocate'): TraceabilityNode {
+  p.advance();
+  const source = parseFeaturePath(p);
+  p.expect('to');
+  const target = parseFeaturePath(p);
+  if (p.at(';')) p.advance();
+  return { kind, source, target };
+}
+
 interface ParseContext {
   packageName?: string;
 }
 
-function parseMembers(p: ParserState, definitions: DefinitionNode[], ctx: ParseContext): string | undefined {
+function parseMembers(
+  p: ParserState,
+  definitions: DefinitionNode[],
+  traceability: TraceabilityNode[],
+  ctx: ParseContext
+): string | undefined {
   let doc: string | undefined;
   for (;;) {
     const d = skipDocAndComments(p);
@@ -706,7 +823,7 @@ function parseMembers(p: ParserState, definitions: DefinitionNode[], ctx: ParseC
       const name = p.advance().value;
       if (ctx.packageName === undefined) ctx.packageName = name;
       p.expect('{');
-      const innerDoc = parseMembers(p, definitions, ctx);
+      const innerDoc = parseMembers(p, definitions, traceability, ctx);
       if (innerDoc && !doc) doc = innerDoc;
       p.expect('}');
       continue;
@@ -740,9 +857,33 @@ function parseMembers(p: ParserState, definitions: DefinitionNode[], ctx: ParseC
       parseConnectionUsage(p, []);
       continue;
     }
-    // Part/attribute usages without a body, actions, requirements, states,
-    // views, satisfy, and other SysML v2 constructs are out of scope for
-    // this subset (see README) — skip resiliently rather than fail.
+    if (p.at('requirement') && p.peek(1).value === 'def') {
+      definitions.push(parseRequirementDef(p));
+      continue;
+    }
+    if (p.at('requirement') && p.peek(1).value !== 'def') {
+      definitions.push(parseTopLevelRequirementUsage(p));
+      continue;
+    }
+    if (p.at('satisfy')) {
+      traceability.push(parseSatisfyOrVerify(p, 'satisfy'));
+      continue;
+    }
+    if (p.at('verify')) {
+      traceability.push(parseSatisfyOrVerify(p, 'verify'));
+      continue;
+    }
+    if (p.at('trace')) {
+      traceability.push(parseTraceOrAllocate(p, 'trace'));
+      continue;
+    }
+    if (p.at('allocate')) {
+      traceability.push(parseTraceOrAllocate(p, 'allocate'));
+      continue;
+    }
+    // Part/attribute usages without a body, actions, states, views, and
+    // other SysML v2 constructs are out of scope for this subset (see
+    // README) — skip resiliently rather than fail.
     skipUnknownMember(p);
   }
   return doc;
@@ -759,7 +900,8 @@ function stripDiagramHeader(text: string): string {
 export function parseSysml(text: string): SysmlModel {
   const p = new ParserState(tokenize(stripDiagramHeader(text)));
   const definitions: DefinitionNode[] = [];
+  const traceability: TraceabilityNode[] = [];
   const ctx: ParseContext = {};
-  const doc = parseMembers(p, definitions, ctx);
-  return { packageName: ctx.packageName, doc, definitions };
+  const doc = parseMembers(p, definitions, traceability, ctx);
+  return { packageName: ctx.packageName, doc, definitions, traceability };
 }

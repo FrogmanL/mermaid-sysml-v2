@@ -2,7 +2,7 @@ import { select } from 'd3';
 import type { Selection } from 'd3';
 import { log, getConfig, setupGraphViewbox } from './mermaidUtils.js';
 import { getModel, getAccTitle, getAccDescription } from './db.js';
-import type { ConnectorNode, DefinitionNode, PartUsageNode, TypeRelation } from './parser/ast.js';
+import type { ConnectorNode, DefinitionNode, PartUsageNode, TraceabilityNode, TypeRelation } from './parser/ast.js';
 
 type G = Selection<SVGGElement, unknown, null, undefined>;
 
@@ -183,23 +183,41 @@ function toLeafBox(def: DefinitionNode): LeafBox {
     }
     return { stereotype: 'interface def', name: def.name, rounded: false, doc: def.doc, compartments };
   }
-  // connectionDef
+  if (def.kind === 'connectionDef') {
+    const compartments: RenderCompartment[] = [];
+    if (def.attributes.length) {
+      compartments.push({
+        label: 'attributes',
+        lines: def.attributes.map((a) =>
+          a.value !== undefined ? `${a.name} = ${a.value}` : `${a.name}${typeSuffix(a.type, a.typeKind)}`
+        ),
+      });
+    }
+    if (def.ends.length) {
+      compartments.push({
+        label: 'ends',
+        lines: def.ends.map((e) => `${e.name}${typeSuffix(e.type, e.typeKind)}`),
+      });
+    }
+    return { stereotype: 'connection def', name: def.name, rounded: false, doc: def.doc, compartments };
+  }
+  // requirementDef — the derivation relationship (`:>`) is drawn as an arrow
+  // (see `drawTraceabilityArrows`), not shown as text here, matching how
+  // definition-level specialization is treated elsewhere in this renderer.
   const compartments: RenderCompartment[] = [];
-  if (def.attributes.length) {
+  if (def.subject) {
     compartments.push({
-      label: 'attributes',
-      lines: def.attributes.map((a) =>
-        a.value !== undefined ? `${a.name} = ${a.value}` : `${a.name}${typeSuffix(a.type, a.typeKind)}`
-      ),
+      label: 'subject',
+      lines: [`${def.subject.name}${typeSuffix(def.subject.type, undefined)}`],
     });
   }
-  if (def.ends.length) {
-    compartments.push({
-      label: 'ends',
-      lines: def.ends.map((e) => `${e.name}${typeSuffix(e.type, e.typeKind)}`),
-    });
-  }
-  return { stereotype: 'connection def', name: def.name, rounded: false, doc: def.doc, compartments };
+  return {
+    stereotype: def.isUsage ? 'requirement' : 'requirement def',
+    name: def.isUsage ? `${def.name}${typeSuffix(def.usageType, undefined)}` : def.name,
+    rounded: !!def.isUsage,
+    doc: def.doc,
+    compartments,
+  };
 }
 
 function measureLeafBox(box: LeafBox): { width: number; height: number } {
@@ -902,25 +920,172 @@ function drawSpecializationArrow(g: G, subRect: Rect, superRect: Rect): void {
     );
 }
 
-/** `A::B::Name` -> `Name` — packages are flattened and definitions matched by simple name only, so a qualified supertype is resolved by its last segment. */
-function lastSegment(qualifiedName: string): string {
-  const idx = qualifiedName.lastIndexOf('::');
-  return idx === -1 ? qualifiedName : qualifiedName.slice(idx + 2);
+/**
+ * `A::B::Name` -> `Name`, `bvm.coinAcceptor` -> `coinAcceptor` — packages
+ * are flattened and top-level boxes matched by simple name only, so a
+ * qualified supertype or a dotted instance path is resolved by its last
+ * segment. This is a best-effort heuristic, not real path resolution: it
+ * finds a box literally named `coinAcceptor`, not "the `coinAcceptor` child
+ * of whatever `bvm` is typed as" — see the traceability section below and
+ * "Known limitations" in the README for what this does and doesn't resolve.
+ */
+function lastPathSegment(path: string): string {
+  const normalized = path.replace(/::/g, '.');
+  const idx = normalized.lastIndexOf('.');
+  return idx === -1 ? normalized : normalized.slice(idx + 1);
 }
 
-function drawSpecializationArrows(g: G, positioned: Positioned[]): void {
+function buildRectsByName(positioned: Positioned[]): Map<string, Rect> {
   const rectsByName = new Map<string, Rect>();
   for (const p of positioned) {
     rectsByName.set(p.def.name, { x: p.x, y: p.y, width: p.box.width, height: p.box.height });
   }
+  return rectsByName;
+}
+
+function drawSpecializationArrows(g: G, positioned: Positioned[], rectsByName: Map<string, Rect>): void {
   for (const p of positioned) {
     const superType = p.def.superType;
     if (!superType) continue;
-    const superRect = rectsByName.get(lastSegment(superType));
+    const superRect = rectsByName.get(lastPathSegment(superType));
     if (!superRect) continue;
     const subRect = rectsByName.get(p.def.name)!;
     if (subRect === superRect) continue;
     drawSpecializationArrow(g, subRect, superRect);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Traceability arrows: dashed dependency arrows for the top-level
+// `satisfy`/`verify`/`trace`/`allocate` statements this subset parses (see
+// `TraceabilityNode`), plus a requirement usage's `:>` derivation — SysML v2
+// has no standalone `deriveReqt` keyword, so derivation is ordinary usage
+// subsetting, confirmed against `examples/bvm.mmd`. Each is a plain
+// open-arrowhead dashed line labeled with its own guillemet stereotype,
+// distinct from the hollow-triangle specialization arrow above. Only drawn
+// when both ends resolve to a box in this diagram — see `lastPathSegment`'s
+// doc comment for why a multi-segment instance path (`by bvm.coinAcceptor`)
+// usually won't.
+// ---------------------------------------------------------------------------
+
+const DEP_ARROW_LEN = 10;
+const DEP_ARROW_WIDTH = 8;
+const DEP_NUDGE_STEP = 7;
+
+/**
+ * Spreads repeated attachments to the same box border out from center:
+ * 0, +1, -1, +2, -2, ... (as a step count, scaled by `DEP_NUDGE_STEP`) — so
+ * several dependency arrows sharing an endpoint (a requirement commonly has
+ * a `satisfy` AND a `verify` AND a `trace` all landing on it) fan out along
+ * its border instead of drawing exactly on top of one another when the
+ * boxes involved happen to be collinear in the grid layout.
+ */
+function nudgeOffset(n: number): number {
+  if (n === 0) return 0;
+  const magnitude = Math.ceil(n / 2);
+  const sign = n % 2 === 1 ? 1 : -1;
+  return magnitude * sign * DEP_NUDGE_STEP;
+}
+
+/** A dashed line with an open (unfilled) arrowhead and a guillemet label — the generic dependency-arrow shape shared by satisfy/verify/trace/allocate/derive. Tip at `toRect`. `tailNudge`/`tipNudge` spread out arrows sharing an endpoint (see `nudgeOffset`). */
+function drawDependencyArrow(
+  g: G,
+  fromRect: Rect,
+  toRect: Rect,
+  label: string,
+  tailNudge: number,
+  tipNudge: number
+): void {
+  const fromCenter = rectCenter(fromRect);
+  const toCenter = rectCenter(toRect);
+  let tip = clipToRectBorder(toRect, fromCenter);
+  let tail = clipToRectBorder(fromRect, toCenter);
+
+  const dx = tip.x - tail.x;
+  const dy = tip.y - tail.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len;
+  const uy = dy / len;
+  const px = -uy;
+  const py = ux;
+
+  const tipOffset = nudgeOffset(tipNudge);
+  const tailOffset = nudgeOffset(tailNudge);
+  tip = { x: tip.x + px * tipOffset, y: tip.y + py * tipOffset };
+  tail = { x: tail.x + px * tailOffset, y: tail.y + py * tailOffset };
+
+  const backX = tip.x - ux * DEP_ARROW_LEN;
+  const backY = tip.y - uy * DEP_ARROW_LEN;
+  const leftX = backX + (px * DEP_ARROW_WIDTH) / 2;
+  const leftY = backY + (py * DEP_ARROW_WIDTH) / 2;
+  const rightX = backX - (px * DEP_ARROW_WIDTH) / 2;
+  const rightY = backY - (py * DEP_ARROW_WIDTH) / 2;
+
+  g.append('line')
+    .attr('class', 'dependency-line')
+    .attr('x1', tail.x)
+    .attr('y1', tail.y)
+    .attr('x2', tip.x)
+    .attr('y2', tip.y);
+
+  g.append('polyline')
+    .attr('class', 'dependency-arrowhead')
+    .attr('points', `${leftX},${leftY} ${tip.x},${tip.y} ${rightX},${rightY}`);
+
+  g.append('text')
+    .attr('class', 'dependency-label')
+    .attr('x', (tail.x + tip.x) / 2)
+    .attr('y', (tail.y + tip.y) / 2 - 4)
+    .attr('text-anchor', 'middle')
+    .attr('font-size', '9px')
+    .text(label);
+}
+
+/** `satisfy req by target` / `verify req by target`: drawn from the satisfying/verifying element (`target`) to the requirement (`req`) — the element depends on fulfilling the requirement, per the spec's own dependency-arrow convention. `trace`/`allocate` point from source to target the same way their textual `to` reads. */
+function traceabilityArrowEnds(t: { kind: TraceabilityNode['kind']; source: string; target: string }): {
+  from: string;
+  to: string;
+  label: string;
+} {
+  if (t.kind === 'satisfy' || t.kind === 'verify') {
+    return { from: t.target, to: t.source, label: `«${t.kind}»` };
+  }
+  return { from: t.source, to: t.target, label: `«${t.kind}»` };
+}
+
+function drawTraceabilityArrows(
+  g: G,
+  positioned: Positioned[],
+  rectsByName: Map<string, Rect>,
+  traceability: TraceabilityNode[]
+): void {
+  // Shared across every dependency arrow drawn here (satisfy/verify/trace/
+  // allocate/derive alike), keyed by rect identity, so two different
+  // relationships landing on the same box still fan out from one another —
+  // see `nudgeOffset`.
+  const nudgeCounts = new Map<Rect, number>();
+  const nextNudge = (rect: Rect): number => {
+    const n = nudgeCounts.get(rect) ?? 0;
+    nudgeCounts.set(rect, n + 1);
+    return n;
+  };
+
+  for (const t of traceability) {
+    const { from, to, label } = traceabilityArrowEnds(t);
+    const fromRect = rectsByName.get(lastPathSegment(from));
+    const toRect = rectsByName.get(lastPathSegment(to));
+    if (!fromRect || !toRect || fromRect === toRect) continue;
+    drawDependencyArrow(g, fromRect, toRect, label, nextNudge(fromRect), nextNudge(toRect));
+  }
+
+  // A requirement usage's `:>` derivation — tip at the more general
+  // requirement it narrows, same direction convention as specialization.
+  for (const p of positioned) {
+    if (p.def.kind !== 'requirementDef' || !p.def.derivedFrom) continue;
+    const fromRect = rectsByName.get(p.def.name);
+    const toRect = rectsByName.get(lastPathSegment(p.def.derivedFrom));
+    if (!fromRect || !toRect || fromRect === toRect) continue;
+    drawDependencyArrow(g, fromRect, toRect, '«derive»', nextNudge(fromRect), nextNudge(toRect));
   }
 }
 
@@ -971,7 +1136,9 @@ export const draw = (_text: string, id: string, _version: string): void => {
       if (box.doc) node.append('title').text(box.doc);
       box.render(node);
     }
-    drawSpecializationArrows(g, positioned);
+    const rectsByName = buildRectsByName(positioned);
+    drawSpecializationArrows(g, positioned, rectsByName);
+    drawTraceabilityArrows(g, positioned, rectsByName, model.traceability);
 
     setupGraphViewbox(undefined, svg, 8, useMaxWidth);
   } catch (e) {
