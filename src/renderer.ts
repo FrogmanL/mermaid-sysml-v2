@@ -26,8 +26,8 @@ const PORT_LABEL_H = 12;
 const PORT_SLOT_W = 64;
 const CHILD_GAP = 40;
 const CONTAINER_PAD = 14;
-const CONNECTOR_BASE_DROOP = 16;
-const CONNECTOR_FAN_STEP = 12;
+const CONNECTOR_BASE_DROOP = 18;
+const CONNECTOR_FAN_STEP = 16;
 
 interface PreparedBox {
   width: number;
@@ -326,6 +326,11 @@ function prepareContainerBox(
       node.append('rect').attr('x', 0).attr('y', 0).attr('width', width).attr('height', height);
       drawHeader(node, width, 'part', name);
 
+      // Orthogonal ("staple") routing rather than a smooth curve: each
+      // connector drops straight down to its own lane, travels across, then
+      // drops into the target. Right-angle crossings stay legible where two
+      // curves sharing a lane would visually blend into each other — the
+      // usual reason schematic/IBD tools route this way rather than curved.
       for (const line of lines) {
         const midY = line.midY;
         node
@@ -333,7 +338,7 @@ function prepareContainerBox(
           .attr('class', 'connector')
           .attr(
             'd',
-            `M ${line.x1},${line.y1} C ${line.x1},${midY} ${line.x2},${midY} ${line.x2},${line.y2}`
+            `M ${line.x1},${line.y1} L ${line.x1},${midY} L ${line.x2},${midY} L ${line.x2},${line.y2}`
           );
       }
 

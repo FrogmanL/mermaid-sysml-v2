@@ -23,23 +23,16 @@ const getStyles = (options: any): string => `
   font-style: italic;
   fill: ${options.secondaryTextColor ?? options.textColor ?? '#666'};
 }
-.sysml-v2 .flow path {
-  stroke: ${options.lineColor ?? '#999'};
-  fill: none;
-}
-.sysml-v2 .flow text {
-  fill: ${options.textColor ?? options.primaryTextColor ?? '#333'};
-  font-size: 0.85em;
-}
 .sysml-v2 .child rect {
   fill: ${options.tertiaryColor ?? options.mainBkg ?? '#eee'};
 }
-.sysml-v2 .port rect {
+.sysml-v2 rect.port {
   fill: ${options.nodeBorder ?? options.primaryBorderColor ?? '#999'};
   stroke: ${options.nodeBorder ?? options.primaryBorderColor ?? '#999'};
 }
-.sysml-v2 .connector path {
+.sysml-v2 path.connector {
   stroke: ${options.lineColor ?? '#999'};
+  stroke-width: 1.5px;
   fill: none;
 }
 `;

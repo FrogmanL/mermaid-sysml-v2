@@ -70,8 +70,14 @@
       }
 
       async function loadExample(name) {
-        textarea.value = await fetch(`/examples/${name}`).then((r) => r.text());
-        render();
+        try {
+          const res = await fetch(`/examples/${name}`);
+          if (!res.ok) throw new Error(`${res.status} ${res.statusText} fetching ${name}`);
+          textarea.value = await res.text();
+          render();
+        } catch (err) {
+          target.innerHTML = `<pre style="color:#b00">Failed to load ${name}: ${String(err.message ?? err)}</pre>`;
+        }
       }
 
       exampleSelect.addEventListener('change', () => loadExample(exampleSelect.value));
