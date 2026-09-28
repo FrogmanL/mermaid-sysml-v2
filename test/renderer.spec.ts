@@ -512,4 +512,99 @@ use case def 'Enter Vehicle';`);
     expect(svgEl.querySelectorAll('line.dependency-line').length).toBe(1);
     expect(svgEl.querySelector('text.dependency-label')?.textContent).toBe('«include»');
   });
+
+  it('draws an action flowchart: start circle, action nodes, done circle, and solid succession arrows', () => {
+    db.parse(`sysml-v2
+action def TakePicture {
+  first start;
+  then action focus : Focus { in scene; out image; }
+  then action shoot : Shoot { in image; out picture; }
+  then done;
+}`);
+    select(document.body).append('svg').attr('id', 'sysml-test-32');
+    draw('', 'sysml-test-32', '0.0.0');
+
+    const node = findNodeByTitle(document.querySelector('#sysml-test-32')!, 'TakePicture');
+    expect(node.querySelectorAll('circle.action-start').length).toBe(1);
+    expect(node.querySelectorAll('circle.action-done-outer').length).toBe(1);
+    expect(node.querySelectorAll('circle.action-done-inner').length).toBe(1);
+    expect(node.querySelectorAll('line.succession-line').length).toBe(3);
+    expect(node.querySelectorAll('polygon.succession-arrow').length).toBe(3);
+    const labels = Array.from(node.querySelectorAll('.member')).map((el) => el.textContent);
+    expect(labels).toEqual(expect.arrayContaining(['focus : Focus', 'shoot : Shoot']));
+  });
+
+  it('labels a succession arrow with a bracketed guard when one was given', () => {
+    db.parse(`sysml-v2
+action def TakePicture {
+  action focus : Focus { in scene; out image; }
+  if focus.image.isWellFocused then shoot;
+  action shoot : Shoot { in image; out picture; }
+}`);
+    select(document.body).append('svg').attr('id', 'sysml-test-33');
+    draw('', 'sysml-test-33', '0.0.0');
+
+    const node = findNodeByTitle(document.querySelector('#sysml-test-33')!, 'TakePicture');
+    expect(node.querySelector('text.succession-label')?.textContent).toBe('[focus.image.isWellFocused]');
+  });
+
+  it('draws a dashed data-flow arrow between two action nodes (reusing the dependency-arrow shape)', () => {
+    db.parse(`sysml-v2
+action def TakePicture {
+  action focus: Focus { in scene; out image; }
+  flow from focus.image to shoot.image;
+  action shoot: Shoot { in image; out picture; }
+}`);
+    select(document.body).append('svg').attr('id', 'sysml-test-34');
+    draw('', 'sysml-test-34', '0.0.0');
+
+    const node = findNodeByTitle(document.querySelector('#sysml-test-34')!, 'TakePicture');
+    expect(node.querySelectorAll('line.dependency-line').length).toBe(1);
+    expect(node.querySelectorAll('polyline.dependency-arrowhead').length).toBe(1);
+  });
+
+  it('renders an action def with no flowchart content as a plain leaf box with a parameters compartment', () => {
+    db.parse(`sysml-v2
+action def Focus { in scene : Scene; out image : Image; }`);
+    select(document.body).append('svg').attr('id', 'sysml-test-35');
+    draw('', 'sysml-test-35', '0.0.0');
+
+    const node = findNodeByTitle(document.querySelector('#sysml-test-35')!, 'Focus');
+    expect(node.querySelector(':scope > .stereotype')?.textContent).toBe('«action def»');
+    const lines = Array.from(node.querySelectorAll('.member')).map((el) => el.textContent);
+    expect(lines).toEqual(expect.arrayContaining(['in scene : Scene', 'out image : Image']));
+    expect(node.querySelectorAll('circle.action-start').length).toBe(0);
+  });
+
+  it('renders the real Decision Example idioms without throwing, drawing only the recorded edge', () => {
+    db.parse(`sysml-v2
+package 'Decision Example' {
+  action def MonitorBattery { out charge : Real; }
+  action def AddCharge { in charge : Real; }
+  action def EndCharging;
+
+  action def ChargeBattery {
+    first start;
+    then merge continueCharging;
+    then action monitor : MonitorBattery { out batteryCharge : Real; }
+    then decide;
+      if monitor.batteryCharge < 100 then addCharge;
+      if monitor.batteryCharge >= 100 then endCharging;
+    action addCharge : AddCharge { in charge = monitor.batteryCharge; }
+    then continueCharging;
+    action endCharging : EndCharging;
+    then done;
+  }
+}`);
+    select(document.body).append('svg').attr('id', 'sysml-test-36');
+    expect(() => draw('', 'sysml-test-36', '0.0.0')).not.toThrow();
+    const node = findNodeByTitle(document.querySelector('#sysml-test-36')!, 'ChargeBattery');
+    expect(node.querySelectorAll('circle.action-start').length).toBe(1);
+    // addCharge -> continueCharging (see the parser test) never resolves to
+    // a drawn arrow: continueCharging is just a name given to the unmodeled
+    // merge node, not a real drawn node — gracefully missing, not throwing.
+    // endCharging -> __done__ DOES resolve (done is a real drawn node), so
+    // exactly one succession arrow is expected here.
+    expect(node.querySelectorAll('line.succession-line').length).toBe(1);
+  });
 });

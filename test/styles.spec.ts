@@ -29,6 +29,12 @@ describe('getStyles', () => {
       ['line', 'actor-limb'],
       ['text', 'actor-label'],
       ['line', 'actor-association'],
+      ['circle', 'action-start'],
+      ['circle', 'action-done-outer'],
+      ['circle', 'action-done-inner'],
+      ['line', 'succession-line'],
+      ['polygon', 'succession-arrow'],
+      ['text', 'succession-label'],
     ];
     for (const [el, cls] of elementClassed) {
       expect(css).toMatch(new RegExp(`${el}\\.${cls}\\s*\\{`));

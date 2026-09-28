@@ -3,6 +3,8 @@ import type { Selection } from 'd3';
 import { log, getConfig, setupGraphViewbox } from './mermaidUtils.js';
 import { getModel, getAccTitle, getAccDescription } from './db.js';
 import type {
+  ActionDefNode,
+  ActionUsageNode,
   ConnectorNode,
   DefinitionNode,
   PartUsageNode,
@@ -261,21 +263,44 @@ function toLeafBox(def: DefinitionNode): LeafBox {
     }
     return { stereotype: 'enum def', name: def.name, rounded: false, doc: def.doc, compartments };
   }
-  // useCaseDef — actors are drawn as stick figures outside the box (see
-  // `prepareUseCaseBox`), not as a text compartment here.
+  if (def.kind === 'useCaseDef') {
+    // Actors are drawn as stick figures outside the box (see
+    // `prepareUseCaseBox`), not as a text compartment here.
+    const compartments: RenderCompartment[] = [];
+    if (def.subject) {
+      compartments.push({
+        label: 'subject',
+        lines: [`${def.subject.name}${typeSuffix(def.subject.type, undefined)}`],
+      });
+    }
+    const doc =
+      def.doc && def.objective
+        ? `${def.doc} — Objective: ${def.objective}`
+        : def.objective
+          ? `Objective: ${def.objective}`
+          : def.doc;
+    return {
+      stereotype: def.isUsage ? 'use case' : 'use case def',
+      name: def.isUsage ? `${def.name}${typeSuffix(def.usageType, undefined)}` : def.name,
+      rounded: !!def.isUsage,
+      doc,
+      compartments,
+    };
+  }
+  // actionDef — used only when there's nothing to draw as a flowchart (see
+  // `prepareActionFlowBox`); a plain leaf box showing just its parameters.
   const compartments: RenderCompartment[] = [];
-  if (def.subject) {
+  if (def.params.length) {
     compartments.push({
-      label: 'subject',
-      lines: [`${def.subject.name}${typeSuffix(def.subject.type, undefined)}`],
+      label: 'parameters',
+      lines: def.params.map((p) => `${p.direction} ${p.name || '(unnamed)'}${typeSuffix(p.type, undefined)}`),
     });
   }
-  const doc = def.doc && def.objective ? `${def.doc} — Objective: ${def.objective}` : def.objective ? `Objective: ${def.objective}` : def.doc;
   return {
-    stereotype: def.isUsage ? 'use case' : 'use case def',
+    stereotype: def.isUsage ? 'action' : 'action def',
     name: def.isUsage ? `${def.name}${typeSuffix(def.usageType, undefined)}` : def.name,
     rounded: !!def.isUsage,
-    doc,
+    doc: def.doc,
     compartments,
   };
 }
@@ -988,6 +1013,261 @@ function prepareTreeBox(
 }
 
 // ---------------------------------------------------------------------------
+// Action flowcharts: an `action def`/usage with nested action containment
+// and/or succession/start/done, drawn as a genuine flowchart — rounded
+// action nodes, a filled start circle, a bordered "final" circle for done,
+// solid succession arrows (with a bracketed guard label where one was
+// given), and dashed data-flow arrows (reusing the same dependency-arrow
+// shape built for satisfy/verify/trace/allocate). One level deep — a nested
+// action's own body isn't expanded, same convention as the connector
+// container. See README for exactly what's covered (round 1: no decision/
+// merge/fork/join/loop nodes yet).
+// ---------------------------------------------------------------------------
+
+const ACTION_NODE_MIN_WIDTH = 90;
+const ACTION_NODE_PAD = 10;
+const ACTION_NODE_HEIGHT = 34;
+const ACTION_ROW_GAP_X = 30;
+const ACTION_ROW_GAP_Y = 44;
+const ACTION_TERMINAL_R = 8;
+const ACTION_DONE_OUTER_R = ACTION_TERMINAL_R + 3;
+const ACTION_DONE_INNER_R = 4;
+const ACTION_SUCC_ARROW_LEN = 8;
+const ACTION_SUCC_ARROW_WIDTH = 7;
+
+function actionStereotypeAndName(def: ActionDefNode): { stereotype: string; displayName: string } {
+  if (def.isUsage) {
+    return { stereotype: 'action', displayName: `${def.name}${typeSuffix(def.usageType, undefined)}` };
+  }
+  return { stereotype: 'action def', displayName: def.name };
+}
+
+function actionUsageLabel(a: ActionUsageNode): string {
+  return a.type ? `${a.name} : ${a.type}` : a.name;
+}
+
+interface ActionFlowNode {
+  id: string;
+  kind: 'start' | 'done' | 'action';
+  label?: string;
+  width: number;
+  height: number;
+}
+
+function buildActionFlowNodes(def: ActionDefNode): ActionFlowNode[] {
+  const nodes: ActionFlowNode[] = [];
+  if (def.hasStart) {
+    nodes.push({ id: '__start__', kind: 'start', width: ACTION_TERMINAL_R * 2, height: ACTION_TERMINAL_R * 2 });
+  }
+  for (const a of def.actions) {
+    const label = actionUsageLabel(a);
+    const width = Math.max(ACTION_NODE_MIN_WIDTH, estimateTextWidth(label, 11, true) + ACTION_NODE_PAD * 2);
+    nodes.push({ id: a.name, kind: 'action', label, width, height: ACTION_NODE_HEIGHT });
+  }
+  if (def.hasDone) {
+    nodes.push({ id: '__done__', kind: 'done', width: ACTION_DONE_OUTER_R * 2, height: ACTION_DONE_OUTER_R * 2 });
+  }
+  return nodes;
+}
+
+/** Longest-path-from-a-source layering: each node's depth is one more than its deepest predecessor's, or 0 if it has none. A cycle (shouldn't occur in this round's grammar) defaults to depth 0 rather than looping forever. */
+function computeActionDepths(nodeIds: string[], edges: { from?: string; to: string }[]): Map<string, number> {
+  const incoming = new Map<string, string[]>();
+  for (const id of nodeIds) incoming.set(id, []);
+  for (const e of edges) {
+    if (e.from && incoming.has(e.to) && incoming.has(e.from)) incoming.get(e.to)!.push(e.from);
+  }
+  const depth = new Map<string, number>();
+  const resolving = new Set<string>();
+  function resolve(id: string): number {
+    if (depth.has(id)) return depth.get(id)!;
+    if (resolving.has(id)) return 0;
+    resolving.add(id);
+    const preds = incoming.get(id) ?? [];
+    const d = preds.length ? Math.max(...preds.map(resolve)) + 1 : 0;
+    depth.set(id, d);
+    resolving.delete(id);
+    return d;
+  }
+  for (const id of nodeIds) resolve(id);
+  return depth;
+}
+
+interface PositionedActionNode extends ActionFlowNode {
+  x: number;
+  y: number;
+}
+
+/** Groups nodes into rows by depth, centers each row, stacks rows top to bottom — a plain, uncrossed layered layout (no edge-crossing minimization; round 1's successions are simple enough not to need it). */
+function layoutActionFlow(
+  nodes: ActionFlowNode[],
+  depths: Map<string, number>
+): { positioned: PositionedActionNode[]; width: number; height: number } {
+  const byDepth = new Map<number, ActionFlowNode[]>();
+  for (const n of nodes) {
+    const d = depths.get(n.id) ?? 0;
+    if (!byDepth.has(d)) byDepth.set(d, []);
+    byDepth.get(d)!.push(n);
+  }
+  const depthsSorted = Array.from(byDepth.keys()).sort((a, b) => a - b);
+  const rows = depthsSorted.map((d) => byDepth.get(d)!);
+  const rowWidths = rows.map(
+    (row) => row.reduce((sum, n) => sum + n.width, 0) + (row.length - 1) * ACTION_ROW_GAP_X
+  );
+  const contentWidth = Math.max(0, ...rowWidths);
+
+  const positioned: PositionedActionNode[] = [];
+  let y = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    let x = (contentWidth - rowWidths[i]) / 2;
+    let rowHeight = 0;
+    for (const n of row) {
+      positioned.push({ ...n, x, y });
+      x += n.width + ACTION_ROW_GAP_X;
+      rowHeight = Math.max(rowHeight, n.height);
+    }
+    y += rowHeight + ACTION_ROW_GAP_Y;
+  }
+  const height = Math.max(0, y - ACTION_ROW_GAP_Y);
+  return { positioned, width: contentWidth, height };
+}
+
+function drawActionNode(node: G, n: PositionedActionNode): void {
+  const cx = n.x + n.width / 2;
+  const cy = n.y + n.height / 2;
+  if (n.kind === 'start') {
+    node.append('circle').attr('class', 'action-start').attr('cx', cx).attr('cy', cy).attr('r', ACTION_TERMINAL_R);
+    return;
+  }
+  if (n.kind === 'done') {
+    node
+      .append('circle')
+      .attr('class', 'action-done-outer')
+      .attr('cx', cx)
+      .attr('cy', cy)
+      .attr('r', ACTION_DONE_OUTER_R);
+    node
+      .append('circle')
+      .attr('class', 'action-done-inner')
+      .attr('cx', cx)
+      .attr('cy', cy)
+      .attr('r', ACTION_DONE_INNER_R);
+    return;
+  }
+  boxRect(node, n.x, n.y, n.width, n.height, true);
+  node
+    .append('text')
+    .attr('class', 'member')
+    .attr('x', cx)
+    .attr('y', cy + 4)
+    .attr('text-anchor', 'middle')
+    .attr('font-size', '11px')
+    .text(n.label ?? '');
+}
+
+/** A solid line with a small filled arrowhead — control-flow succession, distinct from the hollow/open/dashed arrows used elsewhere. An optional bracketed guard label sits at the midpoint. */
+function drawSuccessionArrow(g: G, fromRect: Rect, toRect: Rect, label?: string): void {
+  const fromCenter = rectCenter(fromRect);
+  const toCenter = rectCenter(toRect);
+  const tip = clipToRectBorder(toRect, fromCenter);
+  const tail = clipToRectBorder(fromRect, toCenter);
+
+  const dx = tip.x - tail.x;
+  const dy = tip.y - tail.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len;
+  const uy = dy / len;
+  const backX = tip.x - ux * ACTION_SUCC_ARROW_LEN;
+  const backY = tip.y - uy * ACTION_SUCC_ARROW_LEN;
+  const px = -uy;
+  const py = ux;
+
+  g.append('line').attr('class', 'succession-line').attr('x1', tail.x).attr('y1', tail.y).attr('x2', tip.x).attr('y2', tip.y);
+  g.append('polygon')
+    .attr('class', 'succession-arrow')
+    .attr(
+      'points',
+      `${tip.x},${tip.y} ${backX + (px * ACTION_SUCC_ARROW_WIDTH) / 2},${backY + (py * ACTION_SUCC_ARROW_WIDTH) / 2} ${backX - (px * ACTION_SUCC_ARROW_WIDTH) / 2},${backY - (py * ACTION_SUCC_ARROW_WIDTH) / 2}`
+    );
+
+  if (label) {
+    g.append('text')
+      .attr('class', 'succession-label')
+      .attr('x', (tail.x + tip.x) / 2)
+      .attr('y', (tail.y + tip.y) / 2 - 4)
+      .attr('text-anchor', 'middle')
+      .attr('font-size', '9px')
+      .text(label);
+  }
+}
+
+/** Resolves a flow endpoint's dotted path to a drawn node: the first segment names the action, any remainder is kept as an item-name hint for the label (see `connectorLabel`'s analogous role for part connectors). */
+function resolveActionFlowEndpoint(
+  rectByName: Map<string, Rect>,
+  path: string
+): { rect: Rect; item?: string } | undefined {
+  const dot = path.indexOf('.');
+  const nodeName = dot === -1 ? path : path.slice(0, dot);
+  const rect = rectByName.get(nodeName);
+  if (!rect) return undefined;
+  const item = dot === -1 ? undefined : path.slice(dot + 1);
+  return { rect, item };
+}
+
+function prepareActionFlowBox(def: ActionDefNode): PreparedBox {
+  const { stereotype, displayName } = actionStereotypeAndName(def);
+  const headerHeight = PAD + STEREOTYPE_H + TITLE_H + PAD;
+
+  const flowNodes = buildActionFlowNodes(def);
+  const edges = def.successions.map((s) => ({ from: s.from, to: s.to }));
+  const depths = computeActionDepths(
+    flowNodes.map((n) => n.id),
+    edges
+  );
+  const { positioned, width: contentWidth, height: contentHeight } = layoutActionFlow(flowNodes, depths);
+
+  const headerWidth = estimateTextWidth(displayName, 13, true) + PAD * 2;
+  const width = Math.max(MIN_WIDTH, contentWidth + CONTAINER_PAD * 2, headerWidth);
+  const height = headerHeight + (positioned.length ? contentHeight + CONTAINER_PAD * 2 : CONTAINER_PAD);
+  const xOffset = (width - contentWidth) / 2;
+  const yOffset = headerHeight + CONTAINER_PAD;
+
+  return {
+    width,
+    height,
+    doc: def.doc,
+    render(node) {
+      boxRect(node, 0, 0, width, height, !!def.isUsage);
+      drawHeader(node, width, stereotype, displayName);
+
+      const rectByName = new Map<string, Rect>();
+      for (const n of positioned) {
+        const rect: Rect = { x: n.x + xOffset, y: n.y + yOffset, width: n.width, height: n.height };
+        rectByName.set(n.id, rect);
+        drawActionNode(node, { ...n, x: rect.x, y: rect.y });
+      }
+
+      for (const s of def.successions) {
+        const fromRect = s.from ? rectByName.get(s.from) : undefined;
+        const toRect = rectByName.get(s.to);
+        if (!fromRect || !toRect) continue;
+        drawSuccessionArrow(node, fromRect, toRect, s.guard ? `[${s.guard}]` : undefined);
+      }
+
+      for (const flow of def.flows) {
+        if (flow.ends.length !== 2) continue;
+        const from = resolveActionFlowEndpoint(rectByName, flow.ends[0]);
+        const to = resolveActionFlowEndpoint(rectByName, flow.ends[1]);
+        if (!from || !to) continue;
+        const label = flow.name ?? (from.item && from.item === to.item ? from.item : (from.item ?? to.item ?? ''));
+        drawDependencyArrow(node, from.rect, to.rect, label, 0, 0);
+      }
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Top-level layout and draw
 // ---------------------------------------------------------------------------
 
@@ -1016,6 +1296,9 @@ function toRenderList(definitions: DefinitionNode[]): RenderEntry[] {
     }
     if (def.kind === 'useCaseDef') {
       return { box: prepareUseCaseBox(def), def };
+    }
+    if (def.kind === 'actionDef' && (def.actions.length || def.hasStart || def.hasDone)) {
+      return { box: prepareActionFlowBox(def), def };
     }
     return { box: prepareLeafBox(def), def };
   });

@@ -1,5 +1,8 @@
 import { tokenize, type Token } from './lexer.js';
 import type {
+  ActionDefNode,
+  ActionParamNode,
+  ActionUsageNode,
   AttributeDefNode,
   AttributeNode,
   ConnectionDefNode,
@@ -15,6 +18,7 @@ import type {
   PortRefNode,
   RequirementDefNode,
   RequirementSubjectNode,
+  SuccessionNode,
   SysmlModel,
   TraceabilityNode,
   TypeRelation,
@@ -1050,6 +1054,269 @@ function parseTopLevelUseCaseUsage(p: ParserState, traceability: TraceabilityNod
   return def;
 }
 
+/**
+ * `in`/`out [item|ref] [name] [: Type] [= value];` — an action's parameter.
+ * The name is optional (see `ActionParamNode`'s doc comment).
+ */
+function parseActionParam(p: ParserState): ActionParamNode {
+  const direction = p.advance().value as 'in' | 'out';
+  if (p.at('item') || p.at('ref')) p.advance();
+  let name = '';
+  if (p.atIdent()) {
+    name = p.advance().value;
+  }
+  let type: string | undefined;
+  if (p.at(':>') || p.at(':')) {
+    p.advance();
+    type = parseQualifiedName(p);
+  }
+  let value: string | undefined;
+  if (p.at('=')) {
+    p.advance();
+    value = parseRawUntil(p, [';']);
+  }
+  if (p.at(';')) p.advance();
+  return { direction, name, type, value };
+}
+
+/**
+ * A nested `action name [: Type] { ... }` usage — parsed only one level
+ * deep (see `ActionUsageNode`'s doc comment): its own body (further nested
+ * actions, param overrides, flows) is skipped structurally, not modeled.
+ */
+function parseActionUsage(p: ParserState): ActionUsageNode {
+  p.expect('action');
+  const name = p.advance().value;
+  const { type } = parseOptionalTypeAndMultiplicity(p);
+  if (p.at('{')) {
+    skipBalancedBraceBlock(p);
+    if (p.at(';')) p.advance();
+  } else if (p.at(';')) {
+    p.advance();
+  }
+  return { name, type };
+}
+
+/** Guard-expression text after `if`, stopping at the first `then`, `{`, or `;` seen — never crosses into a nested block, unlike the generic `parseRawUntil`. */
+function parseGuardExpression(p: ParserState): string {
+  const parts: string[] = [];
+  while (!p.eof() && !p.at('then') && !p.at('{') && !p.at(';')) {
+    if (p.atComment()) {
+      p.advance();
+      continue;
+    }
+    parts.push(p.advance().value);
+  }
+  return parts
+    .join(' ')
+    .replace(/\s*::\s*/g, '::')
+    .replace(/\s*\.\s*/g, '.')
+    .trim();
+}
+
+const ACTION_CONTROL_NODE_KEYWORDS = new Set(['decide', 'merge', 'fork', 'join', 'loop']);
+
+/**
+ * Consumes a `then`/`first ... then` target, resolving it to a plain action
+ * name when it is one. `done` resolves to the `'__done__'` pseudo-node (and
+ * sets `hasDone`, so the renderer draws the "final" circle) — unlike a
+ * control node (`decide`/`merge`/`fork`/`join`/`loop`, optionally followed
+ * by its own name), which returns `undefined`: round 2 territory, not
+ * modeled here (see `ActionDefNode`'s doc comment).
+ */
+function parseSuccessionTarget(p: ParserState, def: ActionDefNode): string | undefined {
+  const keyword = p.advance().value;
+  if (keyword === 'done') {
+    def.hasDone = true;
+    return '__done__';
+  }
+  if (ACTION_CONTROL_NODE_KEYWORDS.has(keyword)) {
+    if (p.atIdent()) p.advance(); // the control node's own name, if given
+    return undefined;
+  }
+  return keyword;
+}
+
+/**
+ * Handles what follows a (possibly absent) guard: either an optional `then`
+ * plus a target — recording a succession from `from` only when `from` is
+ * itself known — or an inline `{ ... }` branch body (`if guard { ... }`,
+ * round 2 territory), skipped structurally. Returns the new
+ * `lastActionName` the caller should track: the resolved target on success,
+ * or `undefined` otherwise — deliberately *not* falling back to `from`, so
+ * that two guarded branches sitting side by side after an unmodeled control
+ * node (`if a then X; if b then Y;`, as in the OMG's own Decision Example)
+ * don't get chained to each other as if one caused the next.
+ */
+function parseSuccessionThenTarget(
+  p: ParserState,
+  def: ActionDefNode,
+  from: string | undefined,
+  guard: string | undefined
+): string | undefined {
+  if (p.at('then')) p.advance();
+  if (p.at('{')) {
+    skipBalancedBraceBlock(p);
+    if (p.at(';')) p.advance();
+    return undefined;
+  }
+  const to = parseSuccessionTarget(p, def);
+  if (p.at(';')) p.advance();
+  if (to && from !== undefined) {
+    def.successions.push({ from, to, guard });
+    return to;
+  }
+  return undefined;
+}
+
+/**
+ * Shared member loop for both `action def Name { ... }` and a bare
+ * `action name { ... }` usage. Tracks `lastActionName` — the most recently
+ * declared or succeeded action — so a bare `then B;`/`if guard then B;`
+ * (no explicit `first`) resolves its implicit predecessor the way the OMG's
+ * own training corpus idiomatically writes successions. `lastActionName`
+ * is deliberately cleared (not left dangling) whenever the chain runs
+ * through something this round doesn't model (`done`, a control node, or
+ * an inline `if guard { ... }` branch) — see `ActionDefNode`'s doc comment
+ * on why a broken link is drawn as broken, not silently bridged over.
+ */
+function parseActionBody(p: ParserState, def: ActionDefNode): void {
+  p.expect('{');
+  let lastActionName: string | undefined;
+  for (;;) {
+    const doc = skipDocAndComments(p);
+    if (doc && !def.doc) def.doc = doc;
+    if (p.at('}')) {
+      p.advance();
+      break;
+    }
+    if (p.eof()) break;
+    if (p.at('in') || p.at('out')) {
+      def.params.push(parseActionParam(p));
+      continue;
+    }
+    if (p.at('then') && p.peek(1).value === 'action') {
+      p.advance(); // 'then'
+      const usage = parseActionUsage(p);
+      def.actions.push(usage);
+      if (lastActionName) def.successions.push({ from: lastActionName, to: usage.name });
+      lastActionName = usage.name;
+      continue;
+    }
+    if (p.at('action') && p.peek(1).value !== 'def') {
+      const usage = parseActionUsage(p);
+      def.actions.push(usage);
+      lastActionName = usage.name;
+      continue;
+    }
+    if (p.at('first')) {
+      p.advance();
+      const from = p.advance().value;
+      const fromId = from === 'start' ? '__start__' : from;
+      if (from === 'start') def.hasStart = true;
+      let guard: string | undefined;
+      if (p.at('if')) {
+        p.advance();
+        guard = parseGuardExpression(p);
+      }
+      if (p.at('then') || p.at('{')) {
+        lastActionName = parseSuccessionThenTarget(p, def, fromId, guard);
+      } else {
+        lastActionName = fromId;
+        if (p.at(';')) p.advance();
+      }
+      continue;
+    }
+    if (p.at('then')) {
+      p.advance();
+      let guard: string | undefined;
+      if (p.at('if')) {
+        p.advance();
+        guard = parseGuardExpression(p);
+      }
+      lastActionName = parseSuccessionThenTarget(p, def, lastActionName, guard);
+      continue;
+    }
+    if (p.at('if')) {
+      p.advance();
+      const guard = parseGuardExpression(p);
+      lastActionName = parseSuccessionThenTarget(p, def, lastActionName, guard);
+      continue;
+    }
+    if (p.at('succession') && p.peek(1).value === 'flow') {
+      p.advance(); // 'succession' — the flow itself is still modeled below;
+      // the succession implication layered on top of it isn't (see README).
+      def.flows.push(parseConnectorLike(p));
+      continue;
+    }
+    if (p.at('flow')) {
+      def.flows.push(parseConnectorLike(p));
+      continue;
+    }
+    // `bind` (data binding) and the `decide`/`merge`/`fork`/`join`/`loop`
+    // control-node vocabulary as standalone statements (not following a
+    // `then`/`if`) are out of scope for this round — see `ActionDefNode`'s
+    // doc comment. Skipped resiliently like any other unsupported member.
+    skipUnknownMember(p);
+  }
+}
+
+function parseActionDef(p: ParserState): ActionDefNode {
+  p.expect('action');
+  p.expect('def');
+  const name = p.advance().value;
+  let superType: string | undefined;
+  if (p.at(':>') || p.at(':')) {
+    p.advance();
+    superType = parseQualifiedName(p);
+  }
+  const def: ActionDefNode = {
+    kind: 'actionDef',
+    name,
+    superType,
+    params: [],
+    actions: [],
+    successions: [],
+    flows: [],
+  };
+  if (p.at('{')) {
+    parseActionBody(p, def);
+  } else if (p.at(';')) {
+    p.advance();
+  }
+  return def;
+}
+
+/**
+ * A bare top-level `action name [: Type] { ... }` usage — discarded when
+ * body-less (nothing of its own to draw), same as a part usage.
+ */
+function parseTopLevelActionUsage(p: ParserState): ActionDefNode | undefined {
+  p.expect('action');
+  if (!p.atIdent()) {
+    skipUnknownMember(p);
+    return undefined;
+  }
+  const name = p.advance().value;
+  const { type: usageType } = parseOptionalTypeAndMultiplicity(p);
+  if (!p.at('{')) {
+    if (p.at(';')) p.advance();
+    return undefined;
+  }
+  const def: ActionDefNode = {
+    kind: 'actionDef',
+    name,
+    isUsage: true,
+    usageType,
+    params: [],
+    actions: [],
+    successions: [],
+    flows: [],
+  };
+  parseActionBody(p, def);
+  return def;
+}
+
 interface ParseContext {
   packageName?: string;
 }
@@ -1109,6 +1376,15 @@ function parseMembers(
     }
     if (p.at('use') && p.peek(1).value === 'case' && p.peek(2).value !== 'def') {
       const usage = parseTopLevelUseCaseUsage(p, traceability);
+      if (usage) definitions.push(usage);
+      continue;
+    }
+    if (p.at('action') && p.peek(1).value === 'def') {
+      definitions.push(parseActionDef(p));
+      continue;
+    }
+    if (p.at('action') && p.peek(1).value !== 'def') {
+      const usage = parseTopLevelActionUsage(p);
       if (usage) definitions.push(usage);
       continue;
     }

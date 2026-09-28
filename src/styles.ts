@@ -89,6 +89,27 @@ const getStyles = (options: any): string => `
   stroke: ${options.nodeBorder ?? options.primaryBorderColor ?? '#999'};
   stroke-width: 1px;
 }
+.sysml-v2 circle.action-start {
+  fill: ${options.nodeBorder ?? options.primaryBorderColor ?? '#999'};
+}
+.sysml-v2 circle.action-done-outer {
+  fill: none;
+  stroke: ${options.nodeBorder ?? options.primaryBorderColor ?? '#999'};
+  stroke-width: 1px;
+}
+.sysml-v2 circle.action-done-inner {
+  fill: ${options.nodeBorder ?? options.primaryBorderColor ?? '#999'};
+}
+.sysml-v2 line.succession-line {
+  stroke: ${options.lineColor ?? '#999'};
+  stroke-width: 1.5px;
+}
+.sysml-v2 polygon.succession-arrow {
+  fill: ${options.lineColor ?? '#999'};
+}
+.sysml-v2 text.succession-label {
+  fill: ${options.textColor ?? options.primaryTextColor ?? '#333'};
+}
 `;
 
 export default getStyles;

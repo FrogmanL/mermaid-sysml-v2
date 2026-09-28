@@ -5,8 +5,13 @@ export interface Token {
 }
 
 const PUNCT_TRIPLE = ['::>', ':>>'];
-const PUNCT_MULTI = [':>', '::'];
-const PUNCT_SINGLE = '{}();:,.=*+-[]~';
+// `<=`/`>=`/`==`/`!=`/`&&`/`||` matter for a guard expression's raw text
+// (`if monitor.batteryCharge >= 100 then ...;`) — without them here, `>=`
+// mis-lexed as `=` (the `>` fell through to "unknown char, skip") the same
+// way `::>` and `:>>` once did, silently corrupting the guard text a
+// succession arrow shows.
+const PUNCT_MULTI = [':>', '::', '<=', '>=', '==', '!=', '&&', '||'];
+const PUNCT_SINGLE = '{}();:,.=*+-[]~<>!';
 
 /**
  * Minimal hand-written tokenizer for the SysML v2 subset. Line comments

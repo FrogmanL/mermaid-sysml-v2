@@ -256,6 +256,79 @@ export interface TraceabilityNode {
   target: string;
 }
 
+/**
+ * `in`/`out [item|ref] name [: Type] [= value];` — an action's parameter.
+ * `name` is `''` for the shorthand form that omits it entirely (`in item;`),
+ * redefining an inherited parameter positionally rather than by name —
+ * confirmed against the OMG's own training corpus's
+ * `"14. Action Definitions"/Action Shorthand Example.sysml`.
+ */
+export interface ActionParamNode {
+  direction: 'in' | 'out';
+  name: string;
+  type?: string;
+  value?: string;
+}
+
+/**
+ * A nested `action name [: Type] { ... }` usage inside an action's body —
+ * drawn as one flowchart node, not expanded recursively (this subset's
+ * activity support is one level deep, same convention as the connector
+ * container — see README).
+ */
+export interface ActionUsageNode {
+  name: string;
+  type?: string;
+}
+
+/**
+ * `first A [if guard] then B;`, the bare `[if guard] then B;` shorthand
+ * (implicit `from`: whichever action was most recently declared or
+ * succeeded), or the `then action B: Type { ... }` declaration-succession
+ * shorthand (a new action usage that also implicitly succeeds the
+ * previous one). `'__start__'`/`'__done__'` as `from`/`to` refer to
+ * `first start;`/`then done;`'s pseudo endpoints, not a real action.
+ */
+export interface SuccessionNode {
+  from?: string;
+  to: string;
+  guard?: string;
+}
+
+/**
+ * `action def Name [:> Super] { in/out params; nested action usages; flow
+ * ...; first/then succession; done; }`, or a bare `action name : Type
+ * { ... }` usage. Grounded against the OMG's own training corpus
+ * (`Systems-Modeling/SysML-v2-Release/sysml/src/training/"14. Action
+ * Definitions"` through `"22. Opaque Actions"`) — see README for exactly
+ * what's covered.
+ *
+ * Deliberately out of scope for this round: `bind` (data binding, parsed
+ * and discarded — not drawn), and the `decide`/`merge`/`fork`/`join`/`loop`
+ * control-node vocabulary — a succession running through one of those is
+ * simply not recorded (the chain breaks there), rather than misrepresented.
+ * Those need actual decision/merge diamonds and fork/join bars, which is
+ * real follow-up work (see README's "Extending this").
+ */
+export interface ActionDefNode {
+  kind: 'actionDef';
+  name: string;
+  isUsage?: boolean;
+  usageType?: string;
+  /** Definition only: supertype after `:>` (specialization). */
+  superType?: string;
+  doc?: string;
+  params: ActionParamNode[];
+  actions: ActionUsageNode[];
+  successions: SuccessionNode[];
+  /** `flow [name] from a.b to c.d;` between two nested actions' items — reuses `ConnectorNode` since the grammar and "binary, resolves via dotted path" shape are identical to a part's connectors. */
+  flows: ConnectorNode[];
+  /** Seen a `first start;` statement — draws a filled start node. */
+  hasStart?: boolean;
+  /** Seen a `then done;` (or `first ... then done;`) statement — draws a bordered "final" node. */
+  hasDone?: boolean;
+}
+
 export type DefinitionNode =
   | PartDefNode
   | PortDefNode
@@ -264,7 +337,8 @@ export type DefinitionNode =
   | RequirementDefNode
   | AttributeDefNode
   | EnumDefNode
-  | UseCaseDefNode;
+  | UseCaseDefNode
+  | ActionDefNode;
 
 export interface SysmlModel {
   packageName?: string;

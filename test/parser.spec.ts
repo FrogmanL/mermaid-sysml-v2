@@ -129,13 +129,14 @@ action providePower {
   // stop — so it swallowed every sibling member up to the next unrelated
   // `}`. Caught against the real BVM model, where this silently ate three
   // `port def`s hiding behind one preceding `attribute def`. `attribute def`
-  // itself is supported now (see below), so this uses `action def` — still
-  // genuinely out of scope — to keep exercising the same skip-recovery path.
+  // and `action def` are both supported now (see below), so this uses
+  // `state def` — still genuinely out of scope — to keep exercising the
+  // same skip-recovery path.
   it('stops skipping right after a braced-but-unsupported construct closes, not at the next unrelated brace', () => {
     const model = parseSysml(`sysml-v2
 package X {
-  action def DoSomething {
-    action step1;
+  state def DoSomething {
+    state step1;
   }
   port def CoinPort {
     out item coin : Real;
@@ -776,5 +777,226 @@ package 'Use Case Usage Example' {
       { kind: 'include', source: 'provide transportation', target: 'Enter Vehicle' },
       { kind: 'include', source: 'provide transportation', target: 'Exit Vehicle' },
     ]);
+  });
+
+  // Action def/usage grammar below is grounded against the OMG's own
+  // training corpus: Systems-Modeling/SysML-v2-Release/sysml/src/training/
+  // "14. Action Definitions" through "17. Control".
+
+  it('parses an action def with in/out params and nested action usages (Action Definition Example)', () => {
+    const model = parseSysml(`sysml-v2
+action def Focus { in scene : Scene; out image : Image; }
+action def Shoot { in image: Image; out picture : Picture; }
+action def TakePicture { in scene : Scene; out picture : Picture;
+  bind focus.scene = scene;
+  action focus: Focus { in scene; out image; }
+  flow from focus.image to shoot.image;
+  action shoot: Shoot { in image; out picture; }
+  bind shoot.picture = picture;
+}`);
+    const takePicture = model.definitions.find((d) => d.name === 'TakePicture');
+    if (takePicture?.kind !== 'actionDef') throw new Error('expected actionDef');
+    expect(takePicture.params).toEqual([
+      { direction: 'in', name: 'scene', type: 'Scene', value: undefined },
+      { direction: 'out', name: 'picture', type: 'Picture', value: undefined },
+    ]);
+    expect(takePicture.actions).toEqual([
+      { name: 'focus', type: 'Focus' },
+      { name: 'shoot', type: 'Shoot' },
+    ]);
+    expect(takePicture.flows).toEqual([{ ends: ['focus.image', 'shoot.image'] }]);
+    // `bind` is parsed past (not lost, not crashing) but not modeled.
+    expect(takePicture.successions).toEqual([]);
+  });
+
+  it('parses `first A then B;` succession (Action Succession Example-1)', () => {
+    const model = parseSysml(`sysml-v2
+action def TakePicture {
+  action focus: Focus { in scene; out image; }
+  first focus then shoot;
+  action shoot: Shoot { in image; out picture; }
+}`);
+    const def = model.definitions[0];
+    if (def.kind !== 'actionDef') throw new Error('expected actionDef');
+    expect(def.successions).toEqual([{ from: 'focus', to: 'shoot', guard: undefined }]);
+  });
+
+  it('parses the `then action B: Type {...}` declaration-succession shorthand (Action Shorthand Example)', () => {
+    const model = parseSysml(`sysml-v2
+action def TakePicture {
+  action focus: Focus {
+    in item scene = TakePicture::scene;
+    out item image;
+  }
+  flow from focus.image to shoot.image;
+  then action shoot: Shoot {
+    in item;
+    out item picture = TakePicture::picture;
+  }
+}`);
+    const def = model.definitions[0];
+    if (def.kind !== 'actionDef') throw new Error('expected actionDef');
+    expect(def.actions.map((a) => a.name)).toEqual(['focus', 'shoot']);
+    expect(def.successions).toEqual([{ from: 'focus', to: 'shoot' }]);
+  });
+
+  it('parses a bare `in item;` param, omitting the name entirely (positional redefinition shorthand)', () => {
+    const model = parseSysml(`sysml-v2
+action def TakePicture {
+  action shoot: Shoot {
+    in item;
+    out item picture = TakePicture::picture;
+  }
+}`);
+    const def = model.definitions[0];
+    if (def.kind !== 'actionDef') throw new Error('expected actionDef');
+    expect(def.actions).toEqual([{ name: 'shoot', type: 'Shoot' }]);
+  });
+
+  it('parses `first A if guard then B;` (Conditional Succession Example-1)', () => {
+    const model = parseSysml(`sysml-v2
+action def TakePicture {
+  action focus : Focus { in scene; out image; }
+  first focus
+    if focus.image.isWellFocused then shoot;
+  action shoot : Shoot { in image; out picture; }
+}`);
+    const def = model.definitions[0];
+    if (def.kind !== 'actionDef') throw new Error('expected actionDef');
+    expect(def.successions).toEqual([
+      { from: 'focus', to: 'shoot', guard: 'focus.image.isWellFocused' },
+    ]);
+  });
+
+  it('parses a bare `if guard then B;` with no leading first (Conditional Succession Example-2)', () => {
+    const model = parseSysml(`sysml-v2
+action def TakePicture {
+  action focus : Focus { in scene; out image; }
+  if focus.image.isWellFocused then shoot;
+  action shoot : Shoot { in image; out picture; }
+}`);
+    const def = model.definitions[0];
+    if (def.kind !== 'actionDef') throw new Error('expected actionDef');
+    expect(def.successions).toEqual([
+      { from: 'focus', to: 'shoot', guard: 'focus.image.isWellFocused' },
+    ]);
+  });
+
+  it('recognizes `first start;` and `then done;` as pseudo-endpoints', () => {
+    const model = parseSysml(`sysml-v2
+action def ChargeBattery {
+  first start;
+  then action monitor : MonitorBattery { out charge; }
+  then done;
+}`);
+    const def = model.definitions[0];
+    if (def.kind !== 'actionDef') throw new Error('expected actionDef');
+    expect(def.hasStart).toBe(true);
+    expect(def.hasDone).toBe(true);
+    expect(def.successions).toEqual([
+      { from: '__start__', to: 'monitor' },
+      { from: 'monitor', to: '__done__' },
+    ]);
+  });
+
+  // A trimmed excerpt of the OMG's own Decision Example.sysml — real idioms
+  // this subset doesn't model (decide/merge control nodes) mixed with ones
+  // it does (first/then succession). Should parse without throwing; a
+  // succession running through `decide`/`merge` is simply not recorded
+  // (the chain breaks there), not misattributed to the wrong node.
+  it('does not throw on the real Decision Example idioms, not bridging successions through decide/merge', () => {
+    const model = parseSysml(`sysml-v2
+package 'Decision Example' {
+  action def MonitorBattery { out charge : Real; }
+  action def AddCharge { in charge : Real; }
+  action def EndCharging;
+
+  action def ChargeBattery {
+    first start;
+    then merge continueCharging;
+    then action monitor : MonitorBattery { out batteryCharge : Real; }
+    then decide;
+      if monitor.batteryCharge < 100 then addCharge;
+      if monitor.batteryCharge >= 100 then endCharging;
+    action addCharge : AddCharge { in charge = monitor.batteryCharge; }
+    then continueCharging;
+    action endCharging : EndCharging;
+    then done;
+  }
+}`);
+    const def = model.definitions.find((d) => d.name === 'ChargeBattery');
+    if (def?.kind !== 'actionDef') throw new Error('expected actionDef');
+    expect(def.hasStart).toBe(true);
+    expect(def.hasDone).toBe(true);
+    // start -> merge -> monitor -> decide -> {addCharge, endCharging} all run
+    // through control nodes this round doesn't model, so none of those are
+    // recorded — not even a misleading "start -> monitor" that skips over
+    // the merge node in between. `action addCharge : AddCharge {...}` then
+    // `then continueCharging;` IS a real, directly-declared edge, so that one
+    // survives (continueCharging itself resolves to nothing drawable, since
+    // it's just a name given to the unmodeled merge node, but the edge is
+    // still correctly recorded here at the parse level) — likewise
+    // `endCharging -> __done__` (a real done pseudo-node, unlike the
+    // unmodeled control nodes).
+    expect(def.successions).toEqual([
+      { from: 'addCharge', to: 'continueCharging', guard: undefined },
+      { from: 'endCharging', to: '__done__' },
+    ]);
+  });
+
+  // Regression: `<`/`>=` (and `==`/`!=`/`&&`/`||`) weren't in the lexer's
+  // punctuation set at all — `>` in particular fell through to "unknown
+  // char, skip" the same way `::>`'s trailing `>` once did, silently
+  // corrupting a guard's text (`monitor.batteryCharge >= 100` became just
+  // `monitor.batteryCharge = 100`). Found while adding the Decision Example
+  // test above.
+  it('preserves comparison operators in a guard expression, not silently dropping them', () => {
+    const model = parseSysml(`sysml-v2
+action def TakePicture {
+  action focus : Focus { in scene; out image; }
+  if focus.count >= 3 then shoot;
+  action shoot : Shoot { in image; out picture; }
+}`);
+    const def = model.definitions[0];
+    if (def.kind !== 'actionDef') throw new Error('expected actionDef');
+    expect(def.successions).toEqual([{ from: 'focus', to: 'shoot', guard: 'focus.count >= 3' }]);
+  });
+
+  // Regression: two guarded branches sitting side by side right after an
+  // unmodeled control node (`if a then X; if b then Y;`, as in the real
+  // Decision Example above) were incorrectly chained to each other — the
+  // second branch's `from` became the first branch's `to`, as if X caused
+  // Y, when both actually branch off the same (unmodeled) decision. Fixed
+  // by only recording a successor's own name as the next `lastActionName`
+  // when it had a known `from` itself, rather than always propagating
+  // forward.
+  it('does not chain a guarded branch off a sibling branch that also followed an unmodeled control node', () => {
+    const model = parseSysml(`sysml-v2
+action def ChargeBattery {
+  then decide;
+    if a then addCharge;
+    if b then endCharging;
+  action addCharge : AddCharge;
+  action endCharging : EndCharging;
+}`);
+    const def = model.definitions[0];
+    if (def.kind !== 'actionDef') throw new Error('expected actionDef');
+    expect(def.successions).toEqual([]);
+  });
+
+  it('parses action def specialization (:>) the same way as any other definition kind', () => {
+    const model = parseSysml(`sysml-v2
+action def Base;
+action def Derived :> Base;`);
+    const derived = model.definitions.find((d) => d.name === 'Derived');
+    if (derived?.kind !== 'actionDef') throw new Error('expected actionDef');
+    expect(derived.superType).toBe('Base');
+  });
+
+  it('discards a body-less top-level action usage, like a part usage', () => {
+    const model = parseSysml(`sysml-v2
+action def TakePicture;
+action takePicture : TakePicture;`);
+    expect(model.definitions.map((d) => d.name)).toEqual(['TakePicture']);
   });
 });
