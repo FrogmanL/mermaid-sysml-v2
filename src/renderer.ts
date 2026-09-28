@@ -2,7 +2,9 @@ import { select } from 'd3';
 import type { Selection } from 'd3';
 import { log, getConfig, setupGraphViewbox } from './mermaidUtils.js';
 import { getModel, getAccTitle, getAccDescription } from './db.js';
-import type { DefinitionNode } from './parser/ast.js';
+import type { ConnectorNode, DefinitionNode } from './parser/ast.js';
+
+type G = Selection<SVGGElement, unknown, null, undefined>;
 
 // Layout constants (logical px; the final SVG is rescaled by setupGraphViewbox).
 const PAD = 10;
@@ -15,77 +17,117 @@ const GAP_X = 30;
 const GAP_Y = 30;
 const MIN_WIDTH = 150;
 
-interface RenderCompartment {
-  label?: string;
-  lines: string[];
-}
+// Container (containment + connectors) layout constants.
+const CHILD_PAD = 8;
+const CHILD_HEADER_H = 20;
+const CHILD_MIN_WIDTH = 90;
+const PORT_SIZE = 10;
+const PORT_LABEL_H = 12;
+const PORT_SLOT_W = 64;
+const CHILD_GAP = 40;
+const CONTAINER_PAD = 14;
+const CONNECTOR_BASE_DROOP = 16;
+const CONNECTOR_FAN_STEP = 12;
 
-interface RenderBox {
-  stereotype: 'part' | 'port' | 'interface';
-  name: string;
+interface PreparedBox {
+  width: number;
+  height: number;
   doc?: string;
-  compartments: RenderCompartment[];
-}
-
-function toBoxes(definitions: DefinitionNode[]): RenderBox[] {
-  return definitions.map((def): RenderBox => {
-    if (def.kind === 'partDef') {
-      const compartments: RenderCompartment[] = [];
-      if (def.attributes.length) {
-        compartments.push({
-          label: 'attributes',
-          lines: def.attributes.map((a) =>
-            a.value !== undefined
-              ? `${a.name} = ${a.value}`
-              : a.type
-                ? `${a.name} : ${a.type}`
-                : a.name
-          ),
-        });
-      }
-      if (def.ports.length) {
-        compartments.push({
-          label: 'ports',
-          lines: def.ports.map((p) => (p.type ? `${p.name} : ${p.type}` : p.name)),
-        });
-      }
-      return { stereotype: 'part', name: def.name, doc: def.doc, compartments };
-    }
-    if (def.kind === 'portDef') {
-      const compartments: RenderCompartment[] = [];
-      if (def.fields.length) {
-        compartments.push({
-          label: 'flow properties',
-          lines: def.fields.map(
-            (f) => `${f.direction} ${f.name}${f.type ? ` : ${f.type}` : ''}`
-          ),
-        });
-      }
-      return { stereotype: 'port', name: def.name, doc: def.doc, compartments };
-    }
-    // interfaceDef
-    const compartments: RenderCompartment[] = [];
-    if (def.ends.length) {
-      compartments.push({
-        label: 'ends',
-        lines: def.ends.map((e) => (e.type ? `${e.name} : ${e.type}` : e.name)),
-      });
-    }
-    if (def.flows.length) {
-      compartments.push({
-        label: 'flows',
-        lines: def.flows.map((f) => `${f.from} → ${f.to}`),
-      });
-    }
-    return { stereotype: 'interface', name: def.name, doc: def.doc, compartments };
-  });
+  render: (node: G) => void;
 }
 
 function estimateTextWidth(text: string, fontSize: number, bold = false): number {
   return text.length * fontSize * (bold ? 0.66 : 0.6);
 }
 
-function measureBox(box: RenderBox): { width: number; height: number } {
+function drawHeader(node: G, width: number, stereotype: string, name: string): void {
+  node
+    .append('text')
+    .attr('class', 'stereotype')
+    .attr('x', width / 2)
+    .attr('y', PAD + STEREOTYPE_H * 0.75)
+    .attr('text-anchor', 'middle')
+    .attr('font-size', '11px')
+    .text(`«${stereotype}»`);
+
+  node
+    .append('text')
+    .attr('class', 'title')
+    .attr('x', width / 2)
+    .attr('y', PAD + STEREOTYPE_H + TITLE_H * 0.68)
+    .attr('text-anchor', 'middle')
+    .attr('font-size', '13px')
+    .text(name);
+}
+
+// ---------------------------------------------------------------------------
+// Leaf boxes: a definition's own compartmented attributes/ports/ends/flows,
+// for definitions with no containment (part def, port def, interface def).
+// ---------------------------------------------------------------------------
+
+interface RenderCompartment {
+  label?: string;
+  lines: string[];
+}
+
+interface LeafBox {
+  stereotype: 'part' | 'port' | 'interface';
+  name: string;
+  doc?: string;
+  compartments: RenderCompartment[];
+}
+
+function toLeafBox(def: DefinitionNode): LeafBox {
+  if (def.kind === 'partDef') {
+    const compartments: RenderCompartment[] = [];
+    if (def.attributes.length) {
+      compartments.push({
+        label: 'attributes',
+        lines: def.attributes.map((a) =>
+          a.value !== undefined
+            ? `${a.name} = ${a.value}`
+            : a.type
+              ? `${a.name} : ${a.type}`
+              : a.name
+        ),
+      });
+    }
+    if (def.ports.length) {
+      compartments.push({
+        label: 'ports',
+        lines: def.ports.map((p) => (p.type ? `${p.name} : ${p.type}` : p.name)),
+      });
+    }
+    return { stereotype: 'part', name: def.name, doc: def.doc, compartments };
+  }
+  if (def.kind === 'portDef') {
+    const compartments: RenderCompartment[] = [];
+    if (def.fields.length) {
+      compartments.push({
+        label: 'flow properties',
+        lines: def.fields.map((f) => `${f.direction} ${f.name}${f.type ? ` : ${f.type}` : ''}`),
+      });
+    }
+    return { stereotype: 'port', name: def.name, doc: def.doc, compartments };
+  }
+  // interfaceDef
+  const compartments: RenderCompartment[] = [];
+  if (def.ends.length) {
+    compartments.push({
+      label: 'ends',
+      lines: def.ends.map((e) => (e.type ? `${e.name} : ${e.type}` : e.name)),
+    });
+  }
+  if (def.flows.length) {
+    compartments.push({
+      label: 'flows',
+      lines: def.flows.map((f) => `${f.from} → ${f.to}`),
+    });
+  }
+  return { stereotype: 'interface', name: def.name, doc: def.doc, compartments };
+}
+
+function measureLeafBox(box: LeafBox): { width: number; height: number } {
   let maxWidth = estimateTextWidth(`«${box.stereotype}»`, 11);
   maxWidth = Math.max(maxWidth, estimateTextWidth(box.name, 13, true));
 
@@ -107,100 +149,284 @@ function measureBox(box: RenderBox): { width: number; height: number } {
   return { width: Math.max(MIN_WIDTH, Math.ceil(maxWidth) + PAD * 2), height: Math.ceil(height) };
 }
 
-interface PositionedBox extends RenderBox {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
+function prepareLeafBox(def: DefinitionNode): PreparedBox {
+  const box = toLeafBox(def);
+  const { width, height } = measureLeafBox(box);
+
+  return {
+    width,
+    height,
+    doc: box.doc,
+    render(node) {
+      node.append('rect').attr('x', 0).attr('y', 0).attr('width', width).attr('height', height);
+      drawHeader(node, width, box.stereotype, box.name);
+
+      let cy = PAD + STEREOTYPE_H + TITLE_H + PAD;
+      for (const comp of box.compartments) {
+        node
+          .append('line')
+          .attr('class', 'divider')
+          .attr('x1', 0)
+          .attr('y1', cy)
+          .attr('x2', width)
+          .attr('y2', cy);
+        cy += DIVIDER_GAP;
+
+        if (comp.label) {
+          node
+            .append('text')
+            .attr('class', 'compartment-label')
+            .attr('x', PAD)
+            .attr('y', cy + LABEL_H * 0.75)
+            .attr('font-size', '10.5px')
+            .text(comp.label);
+          cy += LABEL_H;
+        }
+
+        for (const line of comp.lines) {
+          node
+            .append('text')
+            .attr('class', 'member')
+            .attr('x', PAD)
+            .attr('y', cy + ITEM_H * 0.75)
+            .attr('font-size', '11.5px')
+            .text(line);
+          cy += ITEM_H;
+        }
+      }
+    },
+  };
 }
 
-function layout(boxes: RenderBox[], maxRowWidth: number): PositionedBox[] {
-  const positioned: PositionedBox[] = [];
+// ---------------------------------------------------------------------------
+// Container boxes: a part def/usage with nested `part` containment, drawn as
+// an internal-block-diagram-style box with child boxes and connector lines.
+// ---------------------------------------------------------------------------
+
+interface ContainerChildInput {
+  name: string;
+  type?: string;
+  ports: string[];
+}
+
+interface ChildPort {
+  name: string;
+  x: number;
+}
+
+interface ChildLayout {
+  name: string;
+  type?: string;
+  x: number;
+  width: number;
+  height: number;
+  ports: ChildPort[];
+}
+
+function childLabel(name: string, type?: string): string {
+  return type ? `${name} : ${type}` : name;
+}
+
+function measureChildren(children: ContainerChildInput[]): {
+  layouts: ChildLayout[];
+  contentWidth: number;
+  maxHeight: number;
+} {
+  const layouts: ChildLayout[] = [];
+  let x = 0;
+  let maxHeight = 0;
+
+  for (const child of children) {
+    const labelWidth = estimateTextWidth(childLabel(child.name, child.type), 12, true) + CHILD_PAD * 2;
+    const portsWidth = child.ports.length * PORT_SLOT_W;
+    const width = Math.max(CHILD_MIN_WIDTH, labelWidth, portsWidth);
+    const height = CHILD_HEADER_H + CHILD_PAD * 2;
+    const ports: ChildPort[] = child.ports.map((name, i) => ({
+      name,
+      x: (width / (child.ports.length + 1)) * (i + 1),
+    }));
+    layouts.push({ name: child.name, type: child.type, x, width, height, ports });
+    x += width + CHILD_GAP;
+    maxHeight = Math.max(maxHeight, height);
+  }
+
+  return { layouts, contentWidth: Math.max(0, x - CHILD_GAP), maxHeight };
+}
+
+/**
+ * Resolves a `child.port[.item]` connector endpoint to the drawn coordinates
+ * of that child's port marker. Only the first two path segments are used —
+ * a third (an individual flow item within the port, as in `h.exit.air`) is
+ * outside this subset's rendering granularity. Returns `undefined` (and the
+ * connector is silently skipped) for anything this can't resolve: paths
+ * outside this container, or SysML v2 constructs beyond `child.port` this
+ * subset doesn't model (n-ary connectors, `::>`-bound ends, etc.).
+ */
+function resolvePortPoint(
+  children: ChildLayout[],
+  endpoint: string,
+  childrenY: number
+): { x: number; y: number } | undefined {
+  const dot = endpoint.indexOf('.');
+  if (dot === -1) return undefined;
+  const childName = endpoint.slice(0, dot);
+  const rest = endpoint.slice(dot + 1);
+  const portName = rest.includes('.') ? rest.slice(0, rest.indexOf('.')) : rest;
+  const child = children.find((c) => c.name === childName);
+  if (!child) return undefined;
+  const port = child.ports.find((p) => p.name === portName);
+  if (!port) return undefined;
+  return { x: child.x + port.x, y: childrenY + child.height };
+}
+
+function prepareContainerBox(
+  name: string,
+  doc: string | undefined,
+  children: ContainerChildInput[],
+  connectors: ConnectorNode[]
+): PreparedBox {
+  const { layouts, contentWidth, maxHeight } = measureChildren(children);
+  const childrenY = PAD + STEREOTYPE_H + TITLE_H + PAD;
+  const width = Math.max(
+    MIN_WIDTH,
+    contentWidth + CONTAINER_PAD * 2,
+    estimateTextWidth(name, 13, true) + CONTAINER_PAD * 2
+  );
+  const labelBottomY = childrenY + maxHeight + PORT_LABEL_H;
+
+  // Resolve connectors to drawable lines up front, deduping identical
+  // child+port pairs — several item flows often share one structural
+  // connector (see README), and would otherwise draw as overlapping lines.
+  // Each gets its own horizontal "fan" band below the port labels, both to
+  // keep the routing legible when one child has several connectors, and so
+  // the curve doesn't cut through the label text sitting just below the row.
+  const seenPairs = new Set<string>();
+  const lines: { x1: number; y1: number; x2: number; y2: number; midY: number }[] = [];
+  for (const c of connectors) {
+    const from = resolvePortPoint(layouts, c.from, childrenY);
+    const to = resolvePortPoint(layouts, c.to, childrenY);
+    if (!from || !to) continue;
+    const key = [`${from.x},${from.y}`, `${to.x},${to.y}`].sort().join('|');
+    if (seenPairs.has(key)) continue;
+    seenPairs.add(key);
+    const midY = labelBottomY + CONNECTOR_BASE_DROOP + lines.length * CONNECTOR_FAN_STEP;
+    lines.push({ x1: from.x, y1: from.y, x2: to.x, y2: to.y, midY });
+  }
+
+  const height =
+    (lines.length
+      ? Math.max(...lines.map((l) => l.midY))
+      : labelBottomY + CONNECTOR_BASE_DROOP) + CONTAINER_PAD;
+
+  return {
+    width,
+    height,
+    doc,
+    render(node) {
+      node.append('rect').attr('x', 0).attr('y', 0).attr('width', width).attr('height', height);
+      drawHeader(node, width, 'part', name);
+
+      for (const line of lines) {
+        const midY = line.midY;
+        node
+          .append('path')
+          .attr('class', 'connector')
+          .attr(
+            'd',
+            `M ${line.x1},${line.y1} C ${line.x1},${midY} ${line.x2},${midY} ${line.x2},${line.y2}`
+          );
+      }
+
+      for (const child of layouts) {
+        const childNode = node
+          .append('g')
+          .attr('class', 'child')
+          .attr('transform', `translate(${child.x},${childrenY})`);
+
+        childNode
+          .append('rect')
+          .attr('x', 0)
+          .attr('y', 0)
+          .attr('width', child.width)
+          .attr('height', child.height);
+
+        childNode
+          .append('text')
+          .attr('class', 'member')
+          .attr('x', child.width / 2)
+          .attr('y', child.height / 2 + 4)
+          .attr('text-anchor', 'middle')
+          .attr('font-size', '12px')
+          .text(childLabel(child.name, child.type));
+
+        for (const port of child.ports) {
+          childNode
+            .append('rect')
+            .attr('class', 'port')
+            .attr('x', port.x - PORT_SIZE / 2)
+            .attr('y', child.height - PORT_SIZE / 2)
+            .attr('width', PORT_SIZE)
+            .attr('height', PORT_SIZE);
+
+          childNode
+            .append('text')
+            .attr('class', 'compartment-label')
+            .attr('x', port.x)
+            .attr('y', child.height + PORT_SIZE / 2 + PORT_LABEL_H * 0.8)
+            .attr('text-anchor', 'middle')
+            .attr('font-size', '9px')
+            .text(port.name);
+        }
+      }
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Top-level layout and draw
+// ---------------------------------------------------------------------------
+
+function toRenderList(definitions: DefinitionNode[]): PreparedBox[] {
+  const byName = new Map<string, DefinitionNode>();
+  for (const def of definitions) byName.set(def.name, def);
+
+  return definitions.map((def): PreparedBox => {
+    if (def.kind === 'partDef' && def.parts.length) {
+      const children: ContainerChildInput[] = def.parts.map((usage) => {
+        const childDef = usage.type ? byName.get(usage.type) : undefined;
+        const ports = childDef && childDef.kind === 'partDef' ? childDef.ports.map((p) => p.name) : [];
+        return { name: usage.name, type: usage.type, ports };
+      });
+      return prepareContainerBox(def.name, def.doc, children, def.connectors);
+    }
+    return prepareLeafBox(def);
+  });
+}
+
+interface Positioned {
+  box: PreparedBox;
+  x: number;
+  y: number;
+}
+
+function layout(boxes: PreparedBox[], maxRowWidth: number): Positioned[] {
+  const positioned: Positioned[] = [];
   let x = 0;
   let y = 0;
   let rowHeight = 0;
 
   for (const box of boxes) {
-    const { width, height } = measureBox(box);
-    if (x > 0 && x + width > maxRowWidth) {
+    if (x > 0 && x + box.width > maxRowWidth) {
       x = 0;
       y += rowHeight + GAP_Y;
       rowHeight = 0;
     }
-    positioned.push({ ...box, x, y, width, height });
-    x += width + GAP_X;
-    rowHeight = Math.max(rowHeight, height);
+    positioned.push({ box, x, y });
+    x += box.width + GAP_X;
+    rowHeight = Math.max(rowHeight, box.height);
   }
 
   return positioned;
-}
-
-function drawBox(parent: Selection<SVGGElement, unknown, null, undefined>, box: PositionedBox): void {
-  const node = parent
-    .append('g')
-    .attr('class', 'node')
-    .attr('transform', `translate(${box.x},${box.y})`);
-
-  node.append('rect').attr('x', 0).attr('y', 0).attr('width', box.width).attr('height', box.height);
-
-  if (box.doc) {
-    node.append('title').text(box.doc);
-  }
-
-  let cy = PAD;
-
-  node
-    .append('text')
-    .attr('class', 'stereotype')
-    .attr('x', box.width / 2)
-    .attr('y', cy + STEREOTYPE_H * 0.75)
-    .attr('text-anchor', 'middle')
-    .attr('font-size', '11px')
-    .text(`«${box.stereotype}»`);
-  cy += STEREOTYPE_H;
-
-  node
-    .append('text')
-    .attr('class', 'title')
-    .attr('x', box.width / 2)
-    .attr('y', cy + TITLE_H * 0.68)
-    .attr('text-anchor', 'middle')
-    .attr('font-size', '13px')
-    .text(box.name);
-  cy += TITLE_H + PAD;
-
-  for (const comp of box.compartments) {
-    node
-      .append('line')
-      .attr('class', 'divider')
-      .attr('x1', 0)
-      .attr('y1', cy)
-      .attr('x2', box.width)
-      .attr('y2', cy);
-    cy += DIVIDER_GAP;
-
-    if (comp.label) {
-      node
-        .append('text')
-        .attr('class', 'compartment-label')
-        .attr('x', PAD)
-        .attr('y', cy + LABEL_H * 0.75)
-        .attr('font-size', '10.5px')
-        .text(comp.label);
-      cy += LABEL_H;
-    }
-
-    for (const line of comp.lines) {
-      node
-        .append('text')
-        .attr('class', 'member')
-        .attr('x', PAD)
-        .attr('y', cy + ITEM_H * 0.75)
-        .attr('font-size', '11.5px')
-        .text(line);
-      cy += ITEM_H;
-    }
-  }
 }
 
 export const draw = (_text: string, id: string, _version: string): void => {
@@ -232,7 +458,7 @@ export const draw = (_text: string, id: string, _version: string): void => {
     if (accTitle) svg.append('title').text(accTitle);
     if (accDescription) svg.append('desc').text(accDescription);
 
-    const g = svg.append('g').attr('class', 'sysml-v2');
+    const g = svg.append('g').attr('class', 'sysml-v2') as unknown as G;
 
     if (!model.definitions.length) {
       g.append('text')
@@ -244,9 +470,10 @@ export const draw = (_text: string, id: string, _version: string): void => {
       return;
     }
 
-    const boxes = layout(toBoxes(model.definitions), maxRowWidth);
-    for (const box of boxes) {
-      drawBox(g as unknown as Selection<SVGGElement, unknown, null, undefined>, box);
+    for (const { box, x, y } of layout(toRenderList(model.definitions), maxRowWidth)) {
+      const node = g.append('g').attr('class', 'node').attr('transform', `translate(${x},${y})`);
+      if (box.doc) node.append('title').text(box.doc);
+      box.render(node);
     }
 
     setupGraphViewbox(undefined, svg, 8, useMaxWidth);

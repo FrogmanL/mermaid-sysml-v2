@@ -31,6 +31,17 @@ const getStyles = (options: any): string => `
   fill: ${options.textColor ?? options.primaryTextColor ?? '#333'};
   font-size: 0.85em;
 }
+.sysml-v2 .child rect {
+  fill: ${options.tertiaryColor ?? options.mainBkg ?? '#eee'};
+}
+.sysml-v2 .port rect {
+  fill: ${options.nodeBorder ?? options.primaryBorderColor ?? '#999'};
+  stroke: ${options.nodeBorder ?? options.primaryBorderColor ?? '#999'};
+}
+.sysml-v2 .connector path {
+  stroke: ${options.lineColor ?? '#999'};
+  fill: none;
+}
 `;
 
 export default getStyles;

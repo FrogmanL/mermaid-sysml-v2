@@ -5,7 +5,7 @@ export interface Token {
 }
 
 const PUNCT_MULTI = [':>', '::'];
-const PUNCT_SINGLE = '{}();:,.=*+-';
+const PUNCT_SINGLE = '{}();:,.=*+-[]~';
 
 /**
  * Minimal hand-written tokenizer for the SysML v2 subset. Line comments
@@ -36,6 +36,18 @@ export function tokenize(input: string): Token[] {
       while (i < n && !(input[i] === '*' && input[i + 1] === '/')) i++;
       i = Math.min(i + 2, n);
       tokens.push({ type: 'comment', value: input.slice(start, i), pos: start });
+      continue;
+    }
+
+    if (ch === "'" || ch === '"') {
+      const start = i;
+      i++;
+      while (i < n && input[i] !== ch) i++;
+      i = Math.min(i + 1, n);
+      // Quoted identifiers (`'Action Decomposition'`, `<'REQ-42'>`) become a
+      // single ident token holding the unquoted text, so a space or operator
+      // char inside the quotes can't fragment downstream parsing.
+      tokens.push({ type: 'ident', value: input.slice(start + 1, Math.max(start + 1, i - 1)), pos: start });
       continue;
     }
 

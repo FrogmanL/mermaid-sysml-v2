@@ -34,6 +34,13 @@
   </head>
   <body>
     <h1>mermaid-sysml-v2 — local demo (edit the source, diagram re-renders)</h1>
+    <p>
+      Example:
+      <select id="example">
+        <option value="vehicle.mmd">vehicle.mmd (part/port/interface defs)</option>
+        <option value="bvm.mmd">bvm.mmd (containment + connectors)</option>
+      </select>
+    </p>
     <div class="cols">
       <textarea id="source" spellcheck="false"></textarea>
       <div id="diagram"></div>
@@ -48,9 +55,7 @@
 
       const textarea = document.getElementById('source');
       const target = document.getElementById('diagram');
-
-      const initialSource = await fetch('/examples/vehicle.mmd').then((r) => r.text());
-      textarea.value = initialSource;
+      const exampleSelect = document.getElementById('example');
 
       let renderId = 0;
       async function render() {
@@ -64,12 +69,18 @@
         }
       }
 
+      async function loadExample(name) {
+        textarea.value = await fetch(`/examples/${name}`).then((r) => r.text());
+        render();
+      }
+
+      exampleSelect.addEventListener('change', () => loadExample(exampleSelect.value));
       textarea.addEventListener('input', () => {
         clearTimeout(window.__renderTimer);
         window.__renderTimer = setTimeout(render, 300);
       });
 
-      render();
+      await loadExample(exampleSelect.value);
     </script>
   </body>
 </html>

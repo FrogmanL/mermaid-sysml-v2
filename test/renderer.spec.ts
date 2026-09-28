@@ -7,6 +7,7 @@ import { injectUtils } from '../src/mermaidUtils.js';
 import { draw } from '../src/renderer.js';
 
 const vehicleSource = readFileSync(join(process.cwd(), 'examples/vehicle.mmd'), 'utf-8');
+const bvmSource = readFileSync(join(process.cwd(), 'examples/bvm.mmd'), 'utf-8');
 
 const noop = () => undefined;
 
@@ -56,5 +57,51 @@ describe('renderer.draw', () => {
       (el) => el.textContent
     );
     expect(texts).toContain('axleMount.transferredTorque → hub.appliedTorque');
+  });
+
+  // BVM's ControlUnit is itself a (single-child) container, since it
+  // contains `part inventory : Product [8];` — so these tests scope to the
+  // BVM node specifically rather than counting `.child`/`.connector` across
+  // the whole document.
+  function findNodeByTitle(root: ParentNode, title: string): Element {
+    const node = Array.from(root.querySelectorAll('.node')).find(
+      (n) => n.querySelector(':scope > .title')?.textContent === title
+    );
+    if (!node) throw new Error(`no top-level node titled "${title}"`);
+    return node;
+  }
+
+  it('draws a container box with one child per contained part and a connector per connect statement', () => {
+    db.parse(bvmSource);
+    select(document.body).append('svg').attr('id', 'sysml-test-4');
+
+    draw('', 'sysml-test-4', '0.0.0');
+
+    const bvmNode = findNodeByTitle(document.querySelector('#sysml-test-4')!, 'BVM');
+    const children = bvmNode.querySelectorAll(':scope > .child');
+    expect(children.length).toBe(5);
+
+    const connectors = bvmNode.querySelectorAll(':scope > .connector');
+    expect(connectors.length).toBe(4);
+
+    const childLabels = Array.from(children)
+      .flatMap((child) => Array.from(child.querySelectorAll('.member')))
+      .map((el) => el.textContent);
+    expect(childLabels).toContain('coinAcceptor : CoinAcceptor');
+  });
+
+  it('draws a port marker labeled with the port name on each child that resolves one', () => {
+    db.parse(bvmSource);
+    select(document.body).append('svg').attr('id', 'sysml-test-5');
+
+    draw('', 'sysml-test-5', '0.0.0');
+
+    const bvmNode = findNodeByTitle(document.querySelector('#sysml-test-5')!, 'BVM');
+    const portLabels = Array.from(bvmNode.querySelectorAll('.child .compartment-label')).map(
+      (el) => el.textContent
+    );
+    expect(portLabels).toEqual(
+      expect.arrayContaining(['coinOut', 'coinIn', 'dispenseOut', 'changeOut', 'displayOut'])
+    );
   });
 });

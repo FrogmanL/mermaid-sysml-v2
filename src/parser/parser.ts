@@ -1,11 +1,12 @@
 import { tokenize, type Token } from './lexer.js';
 import type {
   AttributeNode,
+  ConnectorNode,
   DefinitionNode,
-  FlowNode,
   InterfaceDefNode,
   InterfaceEndNode,
   PartDefNode,
+  PartUsageNode,
   PortDefNode,
   PortFieldNode,
   PortRefNode,
@@ -25,6 +26,10 @@ class ParserState {
   at(value: string): boolean {
     const t = this.peek();
     return (t.type === 'ident' || t.type === 'punct') && t.value === value;
+  }
+
+  atIdent(): boolean {
+    return this.peek().type === 'ident';
   }
 
   atComment(): boolean {
@@ -84,7 +89,12 @@ function skipDocAndComments(p: ParserState): string | undefined {
 }
 
 function parseQualifiedName(p: ParserState): string {
-  let name = p.advance().value;
+  let prefix = '';
+  if (p.at('~')) {
+    prefix = '~';
+    p.advance();
+  }
+  let name = prefix + p.advance().value;
   while (p.at('::')) {
     p.advance();
     if (p.at('*')) {
@@ -114,12 +124,62 @@ function parseRawUntil(p: ParserState, terminators: string[]): string {
     .trim();
 }
 
-/** Best-effort recovery for constructs outside this subset (part usages, actions, etc.): skip to the next top-level `;` or `}`. */
+/** Consumes an optional `[multiplicity]` clause, returning its raw inner text if present. */
+function parseOptionalMultiplicity(p: ParserState): string | undefined {
+  if (!p.at('[')) return undefined;
+  p.advance();
+  const parts: string[] = [];
+  while (!p.eof() && !p.at(']')) parts.push(p.advance().value);
+  if (p.at(']')) p.advance();
+  return parts.join('');
+}
+
+/**
+ * A part usage's type and multiplicity can appear in either order
+ * (`part inventory : Product [8];` vs `part adult[*] : Person;`), and the
+ * type can be introduced by `:`, `:>` (subsets), or `:>>` (redefines, which
+ * our lexer sees as `:>` followed by a dropped `>`) — so this loops rather
+ * than assuming a fixed order or a single separator.
+ */
+function parseOptionalTypeAndMultiplicity(p: ParserState): {
+  type?: string;
+  multiplicity?: string;
+} {
+  let type: string | undefined;
+  let multiplicity: string | undefined;
+  for (;;) {
+    if (multiplicity === undefined && p.at('[')) {
+      multiplicity = parseOptionalMultiplicity(p);
+      continue;
+    }
+    if (type === undefined && (p.at(':') || p.at(':>'))) {
+      p.advance();
+      type = parseQualifiedName(p);
+      continue;
+    }
+    break;
+  }
+  return { type, multiplicity };
+}
+
+/**
+ * Best-effort recovery for constructs outside this subset: skip to the next
+ * top-level `;`, or — for a braced construct with no trailing `;`
+ * (`attribute def Product { ... }`, `view x : Y { ... }`) — stop right after
+ * *its own* matching `}` closes. Without that second condition this would
+ * keep consuming everything after the brace closes, since nothing else
+ * marks the statement as complete, silently swallowing every sibling member
+ * up to the next unrelated `}` (which is usually the enclosing block's own
+ * closer) — confirmed against real files, where this ate three `port def`s
+ * hiding behind one preceding `attribute def`.
+ */
 function skipUnknownMember(p: ParserState): void {
   let depth = 0;
+  let openedBrace = false;
   while (!p.eof()) {
     if (p.at('{')) {
       depth++;
+      openedBrace = true;
       p.advance();
       continue;
     }
@@ -127,12 +187,27 @@ function skipUnknownMember(p: ParserState): void {
       if (depth === 0) return;
       depth--;
       p.advance();
+      if (depth === 0 && openedBrace) {
+        if (p.at(';')) p.advance();
+        return;
+      }
       continue;
     }
     if (p.at(';') && depth === 0) {
       p.advance();
       return;
     }
+    p.advance();
+  }
+}
+
+/** Skips a `{ ... }` block (assumes the current token is `{`), respecting nesting. */
+function skipBalancedBraceBlock(p: ParserState): void {
+  p.expect('{');
+  let depth = 1;
+  while (!p.eof() && depth > 0) {
+    if (p.at('{')) depth++;
+    else if (p.at('}')) depth--;
     p.advance();
   }
 }
@@ -149,7 +224,7 @@ function parseAttribute(p: ParserState): AttributeNode {
   const name = p.advance().value;
   let type: string | undefined;
   let value: string | undefined;
-  if (p.at(':>')) {
+  if (p.at(':>') || p.at(':')) {
     p.advance();
     type = parseQualifiedName(p);
   }
@@ -173,6 +248,84 @@ function parsePortRef(p: ParserState): PortRefNode {
   return { name, type };
 }
 
+/**
+ * A nested `part <name> [: | :> Type] [[mult]] [{ ... } | ;]` containment
+ * usage. Returns `undefined` for unnamed forms this subset doesn't model
+ * (e.g. `part :>> socialService;` redefinition, with no name at all) —
+ * the caller falls back to structural skipping for those.
+ */
+function parsePartUsage(p: ParserState): PartUsageNode | undefined {
+  p.expect('part');
+  if (!p.atIdent()) {
+    skipUnknownMember(p);
+    return undefined;
+  }
+  const name = p.advance().value;
+  const { type, multiplicity } = parseOptionalTypeAndMultiplicity(p);
+  if (p.at('{')) {
+    // A usage's inline body (redefinitions, further nested containment) is
+    // outside this subset's rendering depth (see README) — skip it.
+    skipBalancedBraceBlock(p);
+    if (p.at(';')) p.advance();
+  } else if (p.at(';')) {
+    p.advance();
+  }
+  return { name, type, multiplicity };
+}
+
+/**
+ * Unifies `connect a.b to c.d;` and `flow [name] [from] a.b to c.d;` — both
+ * describe a line between two ports, differing only in an optional leading
+ * name and an optional `from` keyword before the source path.
+ */
+function parseConnectorLike(p: ParserState): ConnectorNode {
+  p.advance(); // 'connect' or 'flow'
+  let name: string | undefined;
+  if (!p.at('from') && !p.at('to') && p.peek(1).value === 'from') {
+    name = p.advance().value;
+  }
+  if (p.at('from')) p.advance();
+  const from = parseRawUntil(p, ['to']);
+  p.expect('to');
+  const to = parseRawUntil(p, [';']);
+  if (p.at(';')) p.advance();
+  return { name, from, to };
+}
+
+/** Shared member loop for both `part def Name { ... }` and a bare `part name { ... }` usage-with-body. */
+function parsePartBody(p: ParserState, def: PartDefNode): void {
+  p.expect('{');
+  for (;;) {
+    const doc = skipDocAndComments(p);
+    if (doc && !def.doc) def.doc = doc;
+    if (p.at('}')) {
+      p.advance();
+      break;
+    }
+    if (p.eof()) break;
+    if (p.at('attribute')) {
+      def.attributes.push(parseAttribute(p));
+      continue;
+    }
+    if (p.at('port') && p.peek(1).value !== 'def') {
+      def.ports.push(parsePortRef(p));
+      continue;
+    }
+    if (p.at('part') && p.peek(1).value !== 'def') {
+      const usage = parsePartUsage(p);
+      if (usage) def.parts.push(usage);
+      continue;
+    }
+    if (p.at('connect') || p.at('flow')) {
+      def.connectors.push(parseConnectorLike(p));
+      continue;
+    }
+    // Nested defs, actions, states, requirements, satisfy, etc. are outside
+    // this subset — skip resiliently rather than fail the whole diagram.
+    skipUnknownMember(p);
+  }
+}
+
 function parsePartDef(p: ParserState): PartDefNode {
   p.expect('part');
   p.expect('def');
@@ -182,35 +335,57 @@ function parsePartDef(p: ParserState): PartDefNode {
     p.advance();
     superType = parseQualifiedName(p);
   }
-  const def: PartDefNode = { kind: 'partDef', name, superType, attributes: [], ports: [] };
+  const def: PartDefNode = {
+    kind: 'partDef',
+    name,
+    superType,
+    attributes: [],
+    ports: [],
+    parts: [],
+    connectors: [],
+  };
   if (p.at('{')) {
-    p.advance();
-    for (;;) {
-      const doc = skipDocAndComments(p);
-      if (doc && !def.doc) def.doc = doc;
-      if (p.at('}')) {
-        p.advance();
-        break;
-      }
-      if (p.eof()) break;
-      if (p.at('attribute')) {
-        def.attributes.push(parseAttribute(p));
-        continue;
-      }
-      if (p.at('port')) {
-        def.ports.push(parsePortRef(p));
-        continue;
-      }
-      skipUnknownMember(p);
-    }
+    parsePartBody(p, def);
   } else if (p.at(';')) {
     p.advance();
   }
   return def;
 }
 
+/**
+ * A bare top-level (or nested-in-package) `part name [: Type] { ... }` usage,
+ * rendered the same way as a part def with containment. Returns `undefined`
+ * for the body-less instantiation-reference form (`part bvm : BVM;`) — with
+ * no attributes/parts/connectors of its own, there's nothing worth drawing.
+ */
+function parseTopLevelPartUsage(p: ParserState): PartDefNode | undefined {
+  p.expect('part');
+  if (!p.atIdent()) {
+    skipUnknownMember(p);
+    return undefined;
+  }
+  const name = p.advance().value;
+  const { type: superType } = parseOptionalTypeAndMultiplicity(p);
+  if (!p.at('{')) {
+    if (p.at(';')) p.advance();
+    return undefined;
+  }
+  const def: PartDefNode = {
+    kind: 'partDef',
+    name,
+    superType,
+    attributes: [],
+    ports: [],
+    parts: [],
+    connectors: [],
+  };
+  parsePartBody(p, def);
+  return def;
+}
+
 function parsePortField(p: ParserState): PortFieldNode {
   const direction = p.advance().value as 'in' | 'out';
+  if (p.at('item') || p.at('ref')) p.advance();
   const name = p.advance().value;
   let type: string | undefined;
   if (p.at(':>') || p.at(':')) {
@@ -260,15 +435,6 @@ function parseInterfaceEnd(p: ParserState): InterfaceEndNode {
   return { name, type };
 }
 
-function parseFlow(p: ParserState): FlowNode {
-  p.expect('flow');
-  const from = parseRawUntil(p, ['to']);
-  p.expect('to');
-  const to = parseRawUntil(p, [';']);
-  if (p.at(';')) p.advance();
-  return { from, to };
-}
-
 function parseInterfaceDef(p: ParserState): InterfaceDefNode {
   p.expect('interface');
   p.expect('def');
@@ -289,7 +455,7 @@ function parseInterfaceDef(p: ParserState): InterfaceDefNode {
         continue;
       }
       if (p.at('flow')) {
-        def.flows.push(parseFlow(p));
+        def.flows.push(parseConnectorLike(p));
         continue;
       }
       skipUnknownMember(p);
@@ -300,7 +466,11 @@ function parseInterfaceDef(p: ParserState): InterfaceDefNode {
   return def;
 }
 
-function parseMembers(p: ParserState, definitions: DefinitionNode[]): string | undefined {
+interface ParseContext {
+  packageName?: string;
+}
+
+function parseMembers(p: ParserState, definitions: DefinitionNode[], ctx: ParseContext): string | undefined {
   let doc: string | undefined;
   for (;;) {
     const d = skipDocAndComments(p);
@@ -308,6 +478,16 @@ function parseMembers(p: ParserState, definitions: DefinitionNode[]): string | u
     if (p.eof() || p.at('}')) break;
     if (p.at('private') || p.at('public') || p.at('protected') || p.at('import')) {
       parseImport(p);
+      continue;
+    }
+    if (p.at('package')) {
+      p.advance();
+      const name = p.advance().value;
+      if (ctx.packageName === undefined) ctx.packageName = name;
+      p.expect('{');
+      const innerDoc = parseMembers(p, definitions, ctx);
+      if (innerDoc && !doc) doc = innerDoc;
+      p.expect('}');
       continue;
     }
     if (p.at('part') && p.peek(1).value === 'def') {
@@ -322,8 +502,14 @@ function parseMembers(p: ParserState, definitions: DefinitionNode[]): string | u
       definitions.push(parseInterfaceDef(p));
       continue;
     }
-    // Part/attribute/action usages and other SysML v2 constructs are out of
-    // scope for this subset (see README) — skip resiliently rather than fail.
+    if (p.at('part') && p.peek(1).value !== 'def') {
+      const usage = parseTopLevelPartUsage(p);
+      if (usage) definitions.push(usage);
+      continue;
+    }
+    // Part/attribute usages without a body, actions, requirements, states,
+    // views, satisfy, and other SysML v2 constructs are out of scope for
+    // this subset (see README) — skip resiliently rather than fail.
     skipUnknownMember(p);
   }
   return doc;
@@ -340,22 +526,7 @@ function stripDiagramHeader(text: string): string {
 export function parseSysml(text: string): SysmlModel {
   const p = new ParserState(tokenize(stripDiagramHeader(text)));
   const definitions: DefinitionNode[] = [];
-  let packageName: string | undefined;
-  let doc: string | undefined;
-
-  doc = skipDocAndComments(p);
-
-  if (p.at('package')) {
-    p.advance();
-    packageName = p.advance().value;
-    p.expect('{');
-    const innerDoc = parseMembers(p, definitions);
-    if (innerDoc && !doc) doc = innerDoc;
-    p.expect('}');
-  } else {
-    const innerDoc = parseMembers(p, definitions);
-    if (innerDoc && !doc) doc = innerDoc;
-  }
-
-  return { packageName, doc, definitions };
+  const ctx: ParseContext = {};
+  const doc = parseMembers(p, definitions, ctx);
+  return { packageName: ctx.packageName, doc, definitions };
 }
