@@ -35,6 +35,19 @@ const getStyles = (options: any): string => `
   stroke-width: 1.5px;
   fill: none;
 }
+.sysml-v2 polygon.connector-arrow {
+  fill: ${options.lineColor ?? '#999'};
+}
+.sysml-v2 text.connector-label {
+  fill: ${options.textColor ?? options.primaryTextColor ?? '#333'};
+}
+.sysml-v2 line.tree-line {
+  stroke: ${options.nodeBorder ?? options.primaryBorderColor ?? '#999'};
+  stroke-width: 1px;
+}
+.sysml-v2 polygon.tree-diamond {
+  fill: ${options.nodeBorder ?? options.primaryBorderColor ?? '#999'};
+}
 `;
 
 export default getStyles;

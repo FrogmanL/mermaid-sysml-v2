@@ -284,4 +284,48 @@ part def Family {
     expect(model.definitions.map((d) => d.name)).toContain('DisplayPort');
     expect(model.definitions.map((d) => d.name)).toContain('DispensePort');
   });
+
+  // Regression: found while reviewing the OMG's own graphical-notation deck
+  // (page 26/34, "Specialization") against the GfSE VehicleModel.sysml file,
+  // which has `part def FrontAxle :> Axle { ... }`. The old code only
+  // checked plain `:` for a definition's supertype, not `:>` — so it left
+  // the parser mid-statement, corrupting FrontAxle into an empty def and
+  // losing its body to the outer skip-recovery logic.
+  it('parses `part def X :> Y` specialization without losing the body or a following sibling', () => {
+    const model = parseSysml(`sysml-v2
+part def Axle {
+  attribute mass;
+}
+part def FrontAxle :> Axle {
+  attribute steeringAngle;
+}
+part def RearAxle;`);
+    const frontAxle = model.definitions.find((d) => d.name === 'FrontAxle');
+    if (frontAxle?.kind !== 'partDef') throw new Error('expected partDef');
+    expect(frontAxle.superType).toBe('Axle');
+    expect(frontAxle.attributes.map((a) => a.name)).toEqual(['steeringAngle']);
+    expect(model.definitions.map((d) => d.name)).toEqual(['Axle', 'FrontAxle', 'RearAxle']);
+  });
+
+  it('marks a part def as not a usage, and a bare top-level part usage as one, with its type captured separately', () => {
+    const model = parseSysml(`sysml-v2
+part def Classroom;
+part roomContext {
+  part c : Classroom;
+}
+part drone : Drone {
+  attribute totalMass = 750;
+}`);
+    const classroom = model.definitions.find((d) => d.name === 'Classroom');
+    const roomContext = model.definitions.find((d) => d.name === 'roomContext');
+    const drone = model.definitions.find((d) => d.name === 'drone');
+    if (classroom?.kind !== 'partDef' || roomContext?.kind !== 'partDef' || drone?.kind !== 'partDef') {
+      throw new Error('expected partDef');
+    }
+    expect(classroom.isUsage).toBeUndefined();
+    expect(roomContext.isUsage).toBe(true);
+    expect(roomContext.usageType).toBeUndefined();
+    expect(drone.isUsage).toBe(true);
+    expect(drone.usageType).toBe('Drone');
+  });
 });

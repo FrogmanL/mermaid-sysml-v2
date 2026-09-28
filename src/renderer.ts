@@ -2,7 +2,7 @@ import { select } from 'd3';
 import type { Selection } from 'd3';
 import { log, getConfig, setupGraphViewbox } from './mermaidUtils.js';
 import { getModel, getAccTitle, getAccDescription } from './db.js';
-import type { ConnectorNode, DefinitionNode } from './parser/ast.js';
+import type { ConnectorNode, DefinitionNode, PartUsageNode } from './parser/ast.js';
 
 type G = Selection<SVGGElement, unknown, null, undefined>;
 
@@ -16,6 +16,7 @@ const DIVIDER_GAP = 6;
 const GAP_X = 30;
 const GAP_Y = 30;
 const MIN_WIDTH = 150;
+const CORNER_RADIUS = 8;
 
 // Container (containment + connectors) layout constants.
 const CHILD_PAD = 8;
@@ -28,6 +29,16 @@ const CHILD_GAP = 40;
 const CONTAINER_PAD = 14;
 const CONNECTOR_BASE_DROOP = 18;
 const CONNECTOR_FAN_STEP = 16;
+const ARROW_SIZE = 5;
+
+// Composition-tree layout constants (containment with no connectors).
+const TREE_CHILD_GAP = 24;
+const TREE_STEM_TOP = 14;
+const TREE_DIAMOND = 6;
+const TREE_STEM_MID = 12;
+const TREE_STEM_BOTTOM = 14;
+const TREE_LEVEL_GAP = TREE_STEM_TOP + TREE_DIAMOND * 2 + TREE_STEM_MID + TREE_STEM_BOTTOM;
+const MAX_TREE_DEPTH = 6;
 
 interface PreparedBox {
   width: number;
@@ -40,11 +51,25 @@ function estimateTextWidth(text: string, fontSize: number, bold = false): number
   return text.length * fontSize * (bold ? 0.66 : 0.6);
 }
 
-function drawHeader(node: G, width: number, stereotype: string, name: string): void {
+/** A box's outer border: sharp corners for a `def` (per spec), rounded for a usage. */
+function boxRect(node: G, x: number, y: number, width: number, height: number, rounded: boolean) {
+  const rect = node.append('rect').attr('x', x).attr('y', y).attr('width', width).attr('height', height);
+  if (rounded) rect.attr('rx', CORNER_RADIUS).attr('ry', CORNER_RADIUS);
+  return rect;
+}
+
+/**
+ * `offsetX` lets a header be centered within a box that itself sits at a
+ * non-zero x (the composition tree's root box, e.g., is horizontally
+ * centered over its children) without wrapping it in an extra translated
+ * `<g>` — keeping `.title`/`.stereotype` a direct child of `.node` in every
+ * box kind, which other code (and tests) key off of.
+ */
+function drawHeader(node: G, width: number, stereotype: string, name: string, offsetX = 0): void {
   node
     .append('text')
     .attr('class', 'stereotype')
-    .attr('x', width / 2)
+    .attr('x', offsetX + width / 2)
     .attr('y', PAD + STEREOTYPE_H * 0.75)
     .attr('text-anchor', 'middle')
     .attr('font-size', '11px')
@@ -53,16 +78,29 @@ function drawHeader(node: G, width: number, stereotype: string, name: string): v
   node
     .append('text')
     .attr('class', 'title')
-    .attr('x', width / 2)
+    .attr('x', offsetX + width / 2)
     .attr('y', PAD + STEREOTYPE_H + TITLE_H * 0.68)
     .attr('text-anchor', 'middle')
     .attr('font-size', '13px')
     .text(name);
 }
 
+/** «part def» / «part» etc., and the header name — a usage shows "name : Type", a definition just its name. */
+function partStereotypeAndName(def: {
+  kind: string;
+  name: string;
+  isUsage?: boolean;
+  usageType?: string;
+}): { stereotype: string; displayName: string } {
+  if (def.isUsage) {
+    return { stereotype: 'part', displayName: def.usageType ? `${def.name} : ${def.usageType}` : def.name };
+  }
+  return { stereotype: 'part def', displayName: def.name };
+}
+
 // ---------------------------------------------------------------------------
 // Leaf boxes: a definition's own compartmented attributes/ports/ends/flows,
-// for definitions with no containment (part def, port def, interface def).
+// for definitions (or containment-free usages) with no containment.
 // ---------------------------------------------------------------------------
 
 interface RenderCompartment {
@@ -71,14 +109,16 @@ interface RenderCompartment {
 }
 
 interface LeafBox {
-  stereotype: 'part' | 'port' | 'interface';
+  stereotype: string;
   name: string;
+  rounded: boolean;
   doc?: string;
   compartments: RenderCompartment[];
 }
 
 function toLeafBox(def: DefinitionNode): LeafBox {
   if (def.kind === 'partDef') {
+    const { stereotype, displayName } = partStereotypeAndName(def);
     const compartments: RenderCompartment[] = [];
     if (def.attributes.length) {
       compartments.push({
@@ -98,7 +138,7 @@ function toLeafBox(def: DefinitionNode): LeafBox {
         lines: def.ports.map((p) => (p.type ? `${p.name} : ${p.type}` : p.name)),
       });
     }
-    return { stereotype: 'part', name: def.name, doc: def.doc, compartments };
+    return { stereotype, name: displayName, rounded: !!def.isUsage, doc: def.doc, compartments };
   }
   if (def.kind === 'portDef') {
     const compartments: RenderCompartment[] = [];
@@ -108,7 +148,7 @@ function toLeafBox(def: DefinitionNode): LeafBox {
         lines: def.fields.map((f) => `${f.direction} ${f.name}${f.type ? ` : ${f.type}` : ''}`),
       });
     }
-    return { stereotype: 'port', name: def.name, doc: def.doc, compartments };
+    return { stereotype: 'port def', name: def.name, rounded: false, doc: def.doc, compartments };
   }
   // interfaceDef
   const compartments: RenderCompartment[] = [];
@@ -124,7 +164,7 @@ function toLeafBox(def: DefinitionNode): LeafBox {
       lines: def.flows.map((f) => `${f.from} → ${f.to}`),
     });
   }
-  return { stereotype: 'interface', name: def.name, doc: def.doc, compartments };
+  return { stereotype: 'interface def', name: def.name, rounded: false, doc: def.doc, compartments };
 }
 
 function measureLeafBox(box: LeafBox): { width: number; height: number } {
@@ -158,7 +198,7 @@ function prepareLeafBox(def: DefinitionNode): PreparedBox {
     height,
     doc: box.doc,
     render(node) {
-      node.append('rect').attr('x', 0).attr('y', 0).attr('width', width).attr('height', height);
+      boxRect(node, 0, 0, width, height, box.rounded);
       drawHeader(node, width, box.stereotype, box.name);
 
       let cy = PAD + STEREOTYPE_H + TITLE_H + PAD;
@@ -199,8 +239,9 @@ function prepareLeafBox(def: DefinitionNode): PreparedBox {
 }
 
 // ---------------------------------------------------------------------------
-// Container boxes: a part def/usage with nested `part` containment, drawn as
-// an internal-block-diagram-style box with child boxes and connector lines.
+// Container boxes: a part def/usage with nested `part` containment *and*
+// connectors, drawn as an internal-block-diagram-style box with child boxes
+// and connector lines. One level deep — see README "Known limitations".
 // ---------------------------------------------------------------------------
 
 interface ContainerChildInput {
@@ -255,33 +296,45 @@ function measureChildren(children: ContainerChildInput[]): {
 
 /**
  * Resolves a `child.port[.item]` connector endpoint to the drawn coordinates
- * of that child's port marker. Only the first two path segments are used —
- * a third (an individual flow item within the port, as in `h.exit.air`) is
- * outside this subset's rendering granularity. Returns `undefined` (and the
- * connector is silently skipped) for anything this can't resolve: paths
- * outside this container, or SysML v2 constructs beyond `child.port` this
- * subset doesn't model (n-ary connectors, `::>`-bound ends, etc.).
+ * of that child's port marker, plus the trailing `.item` segment if present
+ * (used as a flow label — see `connectorLabel`). Only `child.port` itself is
+ * used for resolution; a third segment (an individual flow item within the
+ * port, as in `h.exit.air`) is outside this subset's rendering granularity.
+ * Returns `undefined` (and the connector is silently skipped) for anything
+ * this can't resolve: paths outside this container, or SysML v2 constructs
+ * beyond `child.port` this subset doesn't model (n-ary connectors, `::>`-
+ * bound ends, etc.).
  */
 function resolvePortPoint(
   children: ChildLayout[],
   endpoint: string,
   childrenY: number
-): { x: number; y: number } | undefined {
+): { x: number; y: number; item?: string } | undefined {
   const dot = endpoint.indexOf('.');
   if (dot === -1) return undefined;
   const childName = endpoint.slice(0, dot);
   const rest = endpoint.slice(dot + 1);
-  const portName = rest.includes('.') ? rest.slice(0, rest.indexOf('.')) : rest;
+  const nextDot = rest.indexOf('.');
+  const portName = nextDot === -1 ? rest : rest.slice(0, nextDot);
+  const item = nextDot === -1 ? undefined : rest.slice(nextDot + 1);
   const child = children.find((c) => c.name === childName);
   if (!child) return undefined;
   const port = child.ports.find((p) => p.name === portName);
   if (!port) return undefined;
-  return { x: child.x + port.x, y: childrenY + child.height };
+  return { x: child.x + port.x, y: childrenY + child.height, item };
+}
+
+/** Prefers the conveyed item's name (matches spec's convention of labeling a wire with what flows over it) over a formal connector/flow name. */
+function connectorLabel(c: ConnectorNode, fromItem?: string, toItem?: string): string | undefined {
+  if (fromItem && fromItem === toItem) return fromItem;
+  return fromItem ?? toItem ?? c.name;
 }
 
 function prepareContainerBox(
+  stereotype: string,
   name: string,
   doc: string | undefined,
+  rounded: boolean,
   children: ContainerChildInput[],
   connectors: ConnectorNode[]
 ): PreparedBox {
@@ -301,7 +354,7 @@ function prepareContainerBox(
   // keep the routing legible when one child has several connectors, and so
   // the curve doesn't cut through the label text sitting just below the row.
   const seenPairs = new Set<string>();
-  const lines: { x1: number; y1: number; x2: number; y2: number; midY: number }[] = [];
+  const lines: { x1: number; y1: number; x2: number; y2: number; midY: number; label?: string }[] = [];
   for (const c of connectors) {
     const from = resolvePortPoint(layouts, c.from, childrenY);
     const to = resolvePortPoint(layouts, c.to, childrenY);
@@ -310,7 +363,14 @@ function prepareContainerBox(
     if (seenPairs.has(key)) continue;
     seenPairs.add(key);
     const midY = labelBottomY + CONNECTOR_BASE_DROOP + lines.length * CONNECTOR_FAN_STEP;
-    lines.push({ x1: from.x, y1: from.y, x2: to.x, y2: to.y, midY });
+    lines.push({
+      x1: from.x,
+      y1: from.y,
+      x2: to.x,
+      y2: to.y,
+      midY,
+      label: connectorLabel(c, from.item, to.item),
+    });
   }
 
   const height =
@@ -323,14 +383,17 @@ function prepareContainerBox(
     height,
     doc,
     render(node) {
-      node.append('rect').attr('x', 0).attr('y', 0).attr('width', width).attr('height', height);
-      drawHeader(node, width, 'part', name);
+      boxRect(node, 0, 0, width, height, rounded);
+      drawHeader(node, width, stereotype, name);
 
       // Orthogonal ("staple") routing rather than a smooth curve: each
       // connector drops straight down to its own lane, travels across, then
       // drops into the target. Right-angle crossings stay legible where two
       // curves sharing a lane would visually blend into each other — the
       // usual reason schematic/IBD tools route this way rather than curved.
+      // An arrowhead marks the `to` end (flow direction), and the conveyed
+      // item's name (or the connector's own name, if given) labels the wire,
+      // matching the spec's own "Connecting Parts" notation.
       for (const line of lines) {
         const midY = line.midY;
         node
@@ -340,6 +403,23 @@ function prepareContainerBox(
             'd',
             `M ${line.x1},${line.y1} L ${line.x1},${midY} L ${line.x2},${midY} L ${line.x2},${line.y2}`
           );
+        node
+          .append('polygon')
+          .attr('class', 'connector-arrow')
+          .attr(
+            'points',
+            `${line.x2 - ARROW_SIZE},${line.y2 + ARROW_SIZE * 1.6} ${line.x2 + ARROW_SIZE},${line.y2 + ARROW_SIZE * 1.6} ${line.x2},${line.y2}`
+          );
+        if (line.label) {
+          node
+            .append('text')
+            .attr('class', 'connector-label')
+            .attr('x', (line.x1 + line.x2) / 2)
+            .attr('y', midY - 3)
+            .attr('text-anchor', 'middle')
+            .attr('font-size', '9px')
+            .text(line.label);
+        }
       }
 
       for (const child of layouts) {
@@ -348,12 +428,7 @@ function prepareContainerBox(
           .attr('class', 'child')
           .attr('transform', `translate(${child.x},${childrenY})`);
 
-        childNode
-          .append('rect')
-          .attr('x', 0)
-          .attr('y', 0)
-          .attr('width', child.width)
-          .attr('height', child.height);
+        boxRect(childNode, 0, 0, child.width, child.height, true);
 
         childNode
           .append('text')
@@ -388,6 +463,251 @@ function prepareContainerBox(
 }
 
 // ---------------------------------------------------------------------------
+// Composition trees: a part def/usage with nested `part` containment but no
+// connectors, drawn as the spec's own decomposition-tree notation — a
+// composition diamond under the parent, org-chart lines fanning down to
+// child boxes, recursively for however deep the containment goes.
+// ---------------------------------------------------------------------------
+
+interface TreeDataNode {
+  label: string;
+  children: TreeDataNode[];
+}
+
+function treeUsageLabel(usage: PartUsageNode): string {
+  const base = usage.type ? `${usage.name} : ${usage.type}` : usage.name;
+  return usage.multiplicity ? `${base} [${usage.multiplicity}]` : base;
+}
+
+/** Recursively resolves each part usage's own containment (if its type is itself a def with parts), guarding against cycles and runaway depth. */
+function buildTreeChildren(
+  parts: PartUsageNode[],
+  byName: Map<string, DefinitionNode>,
+  visited: ReadonlySet<string>,
+  depth: number
+): TreeDataNode[] {
+  return parts.map((usage) => {
+    const label = treeUsageLabel(usage);
+    if (depth >= MAX_TREE_DEPTH || !usage.type || visited.has(usage.type)) {
+      return { label, children: [] };
+    }
+    const childDef = byName.get(usage.type);
+    if (childDef?.kind !== 'partDef' || !childDef.parts.length) {
+      return { label, children: [] };
+    }
+    const nextVisited = new Set(visited);
+    nextVisited.add(usage.type);
+    return { label, children: buildTreeChildren(childDef.parts, byName, nextVisited, depth + 1) };
+  });
+}
+
+interface TreeSubtreeLayout {
+  label: string;
+  boxWidth: number;
+  boxHeight: number;
+  subtreeWidth: number;
+  children: TreeSubtreeLayout[];
+}
+
+function measureTreeNode(node: TreeDataNode): TreeSubtreeLayout {
+  const boxWidth = Math.max(
+    CHILD_MIN_WIDTH,
+    estimateTextWidth(node.label, 11.5) + CHILD_PAD * 2,
+    estimateTextWidth('«part»', 10.5) + CHILD_PAD * 2
+  );
+  const boxHeight = CHILD_PAD + STEREOTYPE_H + TITLE_H * 0.7 + CHILD_PAD;
+  const children = node.children.map(measureTreeNode);
+  const childrenWidth = children.length
+    ? children.reduce((sum, c) => sum + c.subtreeWidth, 0) + (children.length - 1) * TREE_CHILD_GAP
+    : 0;
+  return { label: node.label, boxWidth, boxHeight, subtreeWidth: Math.max(boxWidth, childrenWidth), children };
+}
+
+function subtreeHeight(layout: TreeSubtreeLayout): number {
+  if (!layout.children.length) return layout.boxHeight;
+  return layout.boxHeight + TREE_LEVEL_GAP + Math.max(...layout.children.map(subtreeHeight));
+}
+
+function drawSimpleUsageBox(node: G, x: number, y: number, width: number, height: number, label: string): void {
+  const box = node.append('g').attr('transform', `translate(${x},${y})`);
+  boxRect(box, 0, 0, width, height, true);
+  box
+    .append('text')
+    .attr('class', 'stereotype')
+    .attr('x', width / 2)
+    .attr('y', CHILD_PAD + STEREOTYPE_H * 0.6)
+    .attr('text-anchor', 'middle')
+    .attr('font-size', '9.5px')
+    .text('«part»');
+  box
+    .append('text')
+    .attr('class', 'member')
+    .attr('x', width / 2)
+    .attr('y', height - CHILD_PAD - 2)
+    .attr('text-anchor', 'middle')
+    .attr('font-size', '11px')
+    .text(label);
+}
+
+function drawTreeDiamond(node: G, cx: number, cy: number): void {
+  node
+    .append('polygon')
+    .attr('class', 'tree-diamond')
+    .attr(
+      'points',
+      `${cx},${cy - TREE_DIAMOND} ${cx + TREE_DIAMOND},${cy} ${cx},${cy + TREE_DIAMOND} ${cx - TREE_DIAMOND},${cy}`
+    );
+}
+
+/** Draws one subtree (its own box, then recursively its children beneath a composition diamond) within the horizontal span [x, x + layout.subtreeWidth]. */
+function drawTreeSubtree(node: G, layout: TreeSubtreeLayout, x: number, y: number): void {
+  const boxX = x + (layout.subtreeWidth - layout.boxWidth) / 2;
+  drawSimpleUsageBox(node, boxX, y, layout.boxWidth, layout.boxHeight, layout.label);
+  if (!layout.children.length) return;
+
+  const diamondCx = boxX + layout.boxWidth / 2;
+  const diamondCy = y + layout.boxHeight + TREE_STEM_TOP;
+  const barY = diamondCy + TREE_DIAMOND + TREE_STEM_MID;
+  const childY = barY + TREE_STEM_BOTTOM;
+
+  node
+    .append('line')
+    .attr('class', 'tree-line')
+    .attr('x1', diamondCx)
+    .attr('y1', y + layout.boxHeight)
+    .attr('x2', diamondCx)
+    .attr('y2', diamondCy);
+  drawTreeDiamond(node, diamondCx, diamondCy);
+
+  let cx = x;
+  const childCenters: number[] = [];
+  for (const child of layout.children) {
+    childCenters.push(cx + child.subtreeWidth / 2);
+    drawTreeSubtree(node, child, cx, childY);
+    cx += child.subtreeWidth + TREE_CHILD_GAP;
+  }
+
+  if (childCenters.length === 1) {
+    node
+      .append('line')
+      .attr('class', 'tree-line')
+      .attr('x1', diamondCx)
+      .attr('y1', diamondCy + TREE_DIAMOND)
+      .attr('x2', childCenters[0])
+      .attr('y2', childY);
+  } else {
+    node
+      .append('line')
+      .attr('class', 'tree-line')
+      .attr('x1', diamondCx)
+      .attr('y1', diamondCy + TREE_DIAMOND)
+      .attr('x2', diamondCx)
+      .attr('y2', barY);
+    node
+      .append('line')
+      .attr('class', 'tree-line')
+      .attr('x1', childCenters[0])
+      .attr('y1', barY)
+      .attr('x2', childCenters[childCenters.length - 1])
+      .attr('y2', barY);
+    for (const ccx of childCenters) {
+      node.append('line').attr('class', 'tree-line').attr('x1', ccx).attr('y1', barY).attr('x2', ccx).attr('y2', childY);
+    }
+  }
+}
+
+function prepareTreeBox(
+  stereotype: string,
+  name: string,
+  doc: string | undefined,
+  rounded: boolean,
+  parts: PartUsageNode[],
+  byName: Map<string, DefinitionNode>
+): PreparedBox {
+  const children = buildTreeChildren(parts, byName, new Set(), 0).map(measureTreeNode);
+  const parentWidth = Math.max(
+    MIN_WIDTH,
+    estimateTextWidth(name, 13, true) + PAD * 2,
+    estimateTextWidth(`«${stereotype}»`, 11) + PAD * 2
+  );
+  const parentHeight = PAD + STEREOTYPE_H + TITLE_H + PAD;
+
+  const childrenTotalWidth = children.reduce((sum, c) => sum + c.subtreeWidth, 0) + (children.length - 1) * TREE_CHILD_GAP;
+  const width = Math.max(parentWidth, childrenTotalWidth);
+  const maxChildSubtreeHeight = children.length ? Math.max(...children.map(subtreeHeight)) : 0;
+  const height = parentHeight + TREE_LEVEL_GAP + maxChildSubtreeHeight + CONTAINER_PAD;
+
+  return {
+    width,
+    height,
+    doc,
+    render(node) {
+      const parentX = (width - parentWidth) / 2;
+      boxRect(node, parentX, 0, parentWidth, parentHeight, rounded);
+      drawHeader(node, parentWidth, stereotype, name, parentX);
+
+      if (!children.length) return;
+
+      const diamondCx = parentX + parentWidth / 2;
+      const diamondCy = parentHeight + TREE_STEM_TOP;
+      const barY = diamondCy + TREE_DIAMOND + TREE_STEM_MID;
+      const childY = barY + TREE_STEM_BOTTOM;
+
+      node
+        .append('line')
+        .attr('class', 'tree-line')
+        .attr('x1', diamondCx)
+        .attr('y1', parentHeight)
+        .attr('x2', diamondCx)
+        .attr('y2', diamondCy);
+      drawTreeDiamond(node, diamondCx, diamondCy);
+
+      let cx = (width - childrenTotalWidth) / 2;
+      const childCenters: number[] = [];
+      for (const child of children) {
+        childCenters.push(cx + child.subtreeWidth / 2);
+        drawTreeSubtree(node, child, cx, childY);
+        cx += child.subtreeWidth + TREE_CHILD_GAP;
+      }
+
+      if (childCenters.length === 1) {
+        node
+          .append('line')
+          .attr('class', 'tree-line')
+          .attr('x1', diamondCx)
+          .attr('y1', diamondCy + TREE_DIAMOND)
+          .attr('x2', childCenters[0])
+          .attr('y2', childY);
+      } else {
+        node
+          .append('line')
+          .attr('class', 'tree-line')
+          .attr('x1', diamondCx)
+          .attr('y1', diamondCy + TREE_DIAMOND)
+          .attr('x2', diamondCx)
+          .attr('y2', barY);
+        node
+          .append('line')
+          .attr('class', 'tree-line')
+          .attr('x1', childCenters[0])
+          .attr('y1', barY)
+          .attr('x2', childCenters[childCenters.length - 1])
+          .attr('y2', barY);
+        for (const ccx of childCenters) {
+          node
+            .append('line')
+            .attr('class', 'tree-line')
+            .attr('x1', ccx)
+            .attr('y1', barY)
+            .attr('x2', ccx)
+            .attr('y2', childY);
+        }
+      }
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Top-level layout and draw
 // ---------------------------------------------------------------------------
 
@@ -397,12 +717,17 @@ function toRenderList(definitions: DefinitionNode[]): PreparedBox[] {
 
   return definitions.map((def): PreparedBox => {
     if (def.kind === 'partDef' && def.parts.length) {
-      const children: ContainerChildInput[] = def.parts.map((usage) => {
-        const childDef = usage.type ? byName.get(usage.type) : undefined;
-        const ports = childDef && childDef.kind === 'partDef' ? childDef.ports.map((p) => p.name) : [];
-        return { name: usage.name, type: usage.type, ports };
-      });
-      return prepareContainerBox(def.name, def.doc, children, def.connectors);
+      const { stereotype, displayName } = partStereotypeAndName(def);
+      const rounded = !!def.isUsage;
+      if (def.connectors.length) {
+        const children: ContainerChildInput[] = def.parts.map((usage) => {
+          const childDef = usage.type ? byName.get(usage.type) : undefined;
+          const ports = childDef && childDef.kind === 'partDef' ? childDef.ports.map((p) => p.name) : [];
+          return { name: usage.name, type: usage.type, ports };
+        });
+        return prepareContainerBox(stereotype, displayName, def.doc, rounded, children, def.connectors);
+      }
+      return prepareTreeBox(stereotype, displayName, def.doc, rounded, def.parts, byName);
     }
     return prepareLeafBox(def);
   });

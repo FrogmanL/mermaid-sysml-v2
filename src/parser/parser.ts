@@ -331,7 +331,9 @@ function parsePartDef(p: ParserState): PartDefNode {
   p.expect('def');
   const name = p.advance().value;
   let superType: string | undefined;
-  if (p.at(':')) {
+  // Specialization is `:>` per spec (`part def FrontAxle :> Axle`); plain `:`
+  // is accepted too for leniency, though not seen in the wild for defs.
+  if (p.at(':>') || p.at(':')) {
     p.advance();
     superType = parseQualifiedName(p);
   }
@@ -365,7 +367,7 @@ function parseTopLevelPartUsage(p: ParserState): PartDefNode | undefined {
     return undefined;
   }
   const name = p.advance().value;
-  const { type: superType } = parseOptionalTypeAndMultiplicity(p);
+  const { type: usageType } = parseOptionalTypeAndMultiplicity(p);
   if (!p.at('{')) {
     if (p.at(';')) p.advance();
     return undefined;
@@ -373,7 +375,8 @@ function parseTopLevelPartUsage(p: ParserState): PartDefNode | undefined {
   const def: PartDefNode = {
     kind: 'partDef',
     name,
-    superType,
+    isUsage: true,
+    usageType,
     attributes: [],
     ports: [],
     parts: [],

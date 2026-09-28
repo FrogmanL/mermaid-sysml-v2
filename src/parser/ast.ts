@@ -38,6 +38,16 @@ export interface ConnectorNode {
 export interface PartDefNode {
   kind: 'partDef';
   name: string;
+  /**
+   * True for a bare top-level/nested part *usage* with a body
+   * (`part roomContext { ... }`), as opposed to a `part def`. The graphical
+   * notation distinguishes these: a definition renders as a sharp-cornered
+   * box stereotyped «part def», a usage as «part» with "name : Type".
+   */
+  isUsage?: boolean;
+  /** Usage only: the type after `:`/`:>` in `part name : Type { ... }`. */
+  usageType?: string;
+  /** Definition only: the supertype after `:>` (specialization), e.g. `part def FrontAxle :> Axle`. */
   superType?: string;
   doc?: string;
   attributes: AttributeNode[];

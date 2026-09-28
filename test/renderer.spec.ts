@@ -59,10 +59,11 @@ describe('renderer.draw', () => {
     expect(texts).toContain('axleMount.transferredTorque → hub.appliedTorque');
   });
 
-  // BVM's ControlUnit is itself a (single-child) container, since it
-  // contains `part inventory : Product [8];` — so these tests scope to the
-  // BVM node specifically rather than counting `.child`/`.connector` across
-  // the whole document.
+  // BVM's ControlUnit also has containment (`part inventory : Product [8];`)
+  // and renders as its own top-level tree box (no connectors, so the tree
+  // view applies — see below) — so these tests scope to the BVM node
+  // specifically rather than counting `.child`/`.connector` across the
+  // whole document.
   function findNodeByTitle(root: ParentNode, title: string): Element {
     const node = Array.from(root.querySelectorAll('.node')).find(
       (n) => n.querySelector(':scope > .title')?.textContent === title
@@ -103,5 +104,102 @@ describe('renderer.draw', () => {
     expect(portLabels).toEqual(
       expect.arrayContaining(['coinOut', 'coinIn', 'dispenseOut', 'changeOut', 'displayOut'])
     );
+  });
+
+  it('shows «part def» for a definition and «part» with "name : Type" for a usage', () => {
+    db.parse(`sysml-v2
+part def Vehicle {
+  attribute mass;
+}
+part roomContext {
+  part c : Classroom;
+}`);
+    select(document.body).append('svg').attr('id', 'sysml-test-6');
+    draw('', 'sysml-test-6', '0.0.0');
+
+    const vehicleNode = findNodeByTitle(document.querySelector('#sysml-test-6')!, 'Vehicle');
+    expect(vehicleNode.querySelector(':scope > .stereotype')?.textContent).toBe('«part def»');
+
+    const roomContextNode = findNodeByTitle(document.querySelector('#sysml-test-6')!, 'roomContext');
+    expect(roomContextNode.querySelector(':scope > .stereotype')?.textContent).toBe('«part»');
+  });
+
+  it('renders containment with no connectors as a composition tree (diamond + child box, no ports/connector lines)', () => {
+    db.parse(`sysml-v2
+part def Vehicle {
+  part engine : Engine;
+  part chassis : Chassis;
+}
+part def Engine;
+part def Chassis;`);
+    select(document.body).append('svg').attr('id', 'sysml-test-7');
+    draw('', 'sysml-test-7', '0.0.0');
+
+    const vehicleNode = findNodeByTitle(document.querySelector('#sysml-test-7')!, 'Vehicle');
+    expect(vehicleNode.querySelectorAll('polygon.tree-diamond').length).toBe(1);
+    expect(vehicleNode.querySelectorAll('line.tree-line').length).toBeGreaterThan(0);
+    expect(vehicleNode.querySelectorAll('rect.port').length).toBe(0);
+    expect(vehicleNode.querySelectorAll('path.connector').length).toBe(0);
+
+    const childLabels = Array.from(vehicleNode.querySelectorAll('.member')).map((el) => el.textContent);
+    expect(childLabels).toEqual(expect.arrayContaining(['engine : Engine', 'chassis : Chassis']));
+  });
+
+  it('recurses into a child usage that itself has containment, at least two levels deep', () => {
+    db.parse(`sysml-v2
+part def Vehicle {
+  part engine : Engine;
+}
+part def Engine {
+  part cylinder1 : Cylinder;
+  part cylinder2 : Cylinder;
+}
+part def Cylinder;`);
+    select(document.body).append('svg').attr('id', 'sysml-test-8');
+    draw('', 'sysml-test-8', '0.0.0');
+
+    const vehicleNode = findNodeByTitle(document.querySelector('#sysml-test-8')!, 'Vehicle');
+    // One diamond for Vehicle -> engine, one for engine -> its two cylinders.
+    expect(vehicleNode.querySelectorAll('polygon.tree-diamond').length).toBe(2);
+    const labels = Array.from(vehicleNode.querySelectorAll('.member')).map((el) => el.textContent);
+    expect(labels).toEqual(
+      expect.arrayContaining(['engine : Engine', 'cylinder1 : Cylinder', 'cylinder2 : Cylinder'])
+    );
+  });
+
+  it('does not infinite-loop on a containment cycle, and still renders the rest of the tree', () => {
+    db.parse(`sysml-v2
+part def A {
+  part b : B;
+}
+part def B {
+  part a : A;
+}`);
+    select(document.body).append('svg').attr('id', 'sysml-test-9');
+
+    expect(() => draw('', 'sysml-test-9', '0.0.0')).not.toThrow();
+  });
+
+  it('draws a connector arrowhead at the target port, and labels the wire with the conveyed item when the path has one', () => {
+    db.parse(`sysml-v2
+part def RoomContext {
+  part h : Hallway;
+  part c : Classroom;
+  flow h.exit.air to c.entry.air;
+}
+part def Hallway {
+  port exit : ExitPort;
+}
+part def Classroom {
+  port entry : EntryPort;
+}
+port def ExitPort;
+port def EntryPort;`);
+    select(document.body).append('svg').attr('id', 'sysml-test-10');
+    draw('', 'sysml-test-10', '0.0.0');
+
+    const roomNode = findNodeByTitle(document.querySelector('#sysml-test-10')!, 'RoomContext');
+    expect(roomNode.querySelectorAll('polygon.connector-arrow').length).toBe(1);
+    expect(roomNode.querySelector('text.connector-label')?.textContent).toBe('air');
   });
 });

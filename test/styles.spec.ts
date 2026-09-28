@@ -10,11 +10,19 @@ import getStyles from '../src/styles.js';
 // only the applied *style* is wrong), so this asserts the stylesheet
 // string uses the element-then-class form instead.
 describe('getStyles', () => {
-  it('targets the connector path and port rect directly, not as a descendant', () => {
+  it('targets every element-classed shape directly, not as a descendant', () => {
     const css = getStyles({});
-    expect(css).toMatch(/path\.connector\s*\{/);
-    expect(css).toMatch(/rect\.port\s*\{/);
-    expect(css).not.toMatch(/\.connector\s+path/);
-    expect(css).not.toMatch(/\.port\s+rect/);
+    const elementClassed: [string, string][] = [
+      ['path', 'connector'],
+      ['rect', 'port'],
+      ['polygon', 'connector-arrow'],
+      ['text', 'connector-label'],
+      ['line', 'tree-line'],
+      ['polygon', 'tree-diamond'],
+    ];
+    for (const [el, cls] of elementClassed) {
+      expect(css).toMatch(new RegExp(`${el}\\.${cls}\\s*\\{`));
+      expect(css).not.toMatch(new RegExp(`\\.${cls}\\s+${el}`));
+    }
   });
 });
