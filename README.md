@@ -58,10 +58,36 @@ n-ary/`::>`-bound connectors, port redefinition, expressions beyond a raw
 right-hand side — is outside this subset. The parser skips unrecognized
 constructs resiliently (structurally, brace-aware) rather than failing the
 whole diagram, so a real file mixing supported and unsupported constructs
-still renders what it can. This was validated against several real files:
-the vehicle example from the GitHub issue, a hand-written beverage-vending-
-machine model (`examples/bvm.mmd`), and the official SysML v2 spec's and
-GfSE's own public example repos.
+still renders what it can.
+
+### Validation corpus
+
+Checked against real `.sysml` files (read locally during development, not
+vendored into this repo except where noted) from:
+
+- **[Systems-Modeling/SysML-v2-Release](https://github.com/Systems-Modeling/SysML-v2-Release)**
+  — the OMG reference implementation's own repo. Its
+  [`sysml/src/examples`](https://github.com/Systems-Modeling/SysML-v2-Release/tree/master/sysml/src/examples)
+  and `sysml/src/training` directories are canonical, spec-authors'-own
+  models (used: `Room Model/RoomModel.sysml`, `training/17. Control/Camera.sysml`).
+  `sysml.library/Systems Library/*.sysml` in the same repo is the standard
+  library itself (`Parts.sysml`, `Ports.sysml`, etc.) rather than example
+  models — useful for confirming exact library-defined keywords, less so
+  as realistic usage to parse against.
+- **[GfSE/SysML-v2-Models](https://github.com/GfSE/SysML-v2-Models)** — a
+  community-curated collection (Gesellschaft für Systems Engineering),
+  ranging from simple (`example_family/family.sysml`) to genuinely advanced
+  (`SE_Models/VehicleModel.sysml`'s n-ary connectors and `::>`-bound ends,
+  `SE_Models/Drone_BaseArchitecture.sysml`'s multi-package requirement
+  traceability). The advanced end of this repo is where this subset's
+  current limits (below) were found.
+- `examples/vehicle.mmd` — transcribed from the code block in
+  [mermaid-js/mermaid#6317](https://github.com/mermaid-js/mermaid/issues/6317)
+  itself, not from either repo above.
+- `examples/bvm.mmd` — not a found/published example; an LLM-generated
+  model from an earlier session on the user's own MBSE project (its header
+  comment says so), used here because it's real containment/connector usage
+  the user actually produced, not because it's a citable outside source.
 
 **Known limitations**, in rough order of how often they'd bite:
 
