@@ -38,6 +38,9 @@ const getStyles = (options: any): string => `
 .sysml-v2 polygon.connector-arrow {
   fill: ${options.lineColor ?? '#999'};
 }
+.sysml-v2 circle.connector-junction {
+  fill: ${options.lineColor ?? '#999'};
+}
 .sysml-v2 text.connector-label {
   fill: ${options.textColor ?? options.primaryTextColor ?? '#333'};
 }

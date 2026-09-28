@@ -4,6 +4,7 @@ export interface Token {
   pos: number;
 }
 
+const PUNCT_TRIPLE = ['::>'];
 const PUNCT_MULTI = [':>', '::'];
 const PUNCT_SINGLE = '{}();:,.=*+-[]~';
 
@@ -48,6 +49,13 @@ export function tokenize(input: string): Token[] {
       // single ident token holding the unquoted text, so a space or operator
       // char inside the quotes can't fragment downstream parsing.
       tokens.push({ type: 'ident', value: input.slice(start + 1, Math.max(start + 1, i - 1)), pos: start });
+      continue;
+    }
+
+    const three = input.slice(i, i + 3);
+    if (PUNCT_TRIPLE.includes(three)) {
+      tokens.push({ type: 'punct', value: three, pos: i });
+      i += 3;
       continue;
     }
 

@@ -202,4 +202,80 @@ port def EntryPort;`);
     expect(roomNode.querySelectorAll('polygon.connector-arrow').length).toBe(1);
     expect(roomNode.querySelector('text.connector-label')?.textContent).toBe('air');
   });
+
+  it('draws a ::>-bound connect the same as a plain one, resolving only the bound-to path', () => {
+    db.parse(`sysml-v2
+part def Family {
+  part woman : Person;
+  part man : Person;
+  connect communicationPartnerA ::> woman.exchange to communicationPartnerB ::> man.exchange;
+}
+part def Person {
+  port exchange : ExchangePort;
+}
+port def ExchangePort;`);
+    select(document.body).append('svg').attr('id', 'sysml-test-11');
+    draw('', 'sysml-test-11', '0.0.0');
+
+    const familyNode = findNodeByTitle(document.querySelector('#sysml-test-11')!, 'Family');
+    expect(familyNode.querySelectorAll(':scope > .connector').length).toBe(1);
+    expect(familyNode.querySelectorAll(':scope > .connector-arrow').length).toBe(1);
+  });
+
+  it('draws a bare-part connector end (no port) anchored to the child\'s own bottom-center', () => {
+    db.parse(`sysml-v2
+part def Family {
+  part woman : Person;
+  part man : Person;
+  connection child : Child {
+    end mother ::> woman;
+    end father ::> man;
+  }
+}
+part def Person;`);
+    select(document.body).append('svg').attr('id', 'sysml-test-12');
+    draw('', 'sysml-test-12', '0.0.0');
+
+    const familyNode = findNodeByTitle(document.querySelector('#sysml-test-12')!, 'Family');
+    // Person has no ports at all, yet the connection's redefined ends still
+    // resolve to a drawable line anchored on each child's own box.
+    expect(familyNode.querySelectorAll('rect.port').length).toBe(0);
+    expect(familyNode.querySelectorAll(':scope > .connector').length).toBe(1);
+  });
+
+  it('draws an n-ary connector as a junction dot with one branch per end, no arrowhead', () => {
+    db.parse(`sysml-v2
+part def Family {
+  part woman : Person;
+  part man : Person;
+  part child : Person;
+  connect (parent1 ::> woman, parent2 ::> man, certifiedChild ::> child);
+}
+part def Person;`);
+    select(document.body).append('svg').attr('id', 'sysml-test-13');
+    draw('', 'sysml-test-13', '0.0.0');
+
+    const familyNode = findNodeByTitle(document.querySelector('#sysml-test-13')!, 'Family');
+    expect(familyNode.querySelectorAll(':scope > .connector').length).toBe(3);
+    expect(familyNode.querySelectorAll(':scope > .connector-junction').length).toBe(1);
+    expect(familyNode.querySelectorAll(':scope > .connector-arrow').length).toBe(0);
+  });
+
+  it('renders a connection def like interface def, with ends and attributes compartments', () => {
+    db.parse(`sysml-v2
+connection def DeviceConn {
+  end part hub : Hub;
+  end part device : Device;
+  attribute bandwidth : Real;
+}
+part def Hub;
+part def Device;`);
+    select(document.body).append('svg').attr('id', 'sysml-test-14');
+    draw('', 'sysml-test-14', '0.0.0');
+
+    const connNode = findNodeByTitle(document.querySelector('#sysml-test-14')!, 'DeviceConn');
+    expect(connNode.querySelector(':scope > .stereotype')?.textContent).toBe('«connection def»');
+    const lines = Array.from(connNode.querySelectorAll('.member')).map((el) => el.textContent);
+    expect(lines).toEqual(expect.arrayContaining(['hub : Hub', 'device : Device', 'bandwidth : Real']));
+  });
 });

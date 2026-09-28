@@ -1,6 +1,7 @@
 import { tokenize, type Token } from './lexer.js';
 import type {
   AttributeNode,
+  ConnectionDefNode,
   ConnectorNode,
   DefinitionNode,
   InterfaceDefNode,
@@ -122,6 +123,16 @@ function parseRawUntil(p: ParserState, terminators: string[]): string {
     .replace(/\s*::\s*/g, '::')
     .replace(/\s*\.\s*/g, '.')
     .trim();
+}
+
+/** A dotted feature path (`woman`, `h.exit.air`) — self-terminating, since it only ever consumes ident/`.` tokens. */
+function parseFeaturePath(p: ParserState): string {
+  const parts: string[] = [p.advance().value];
+  while (p.at('.')) {
+    p.advance();
+    parts.push(p.advance().value);
+  }
+  return parts.join('.');
 }
 
 /** Consumes an optional `[multiplicity]` clause, returning its raw inner text if present. */
@@ -274,22 +285,111 @@ function parsePartUsage(p: ParserState): PartUsageNode | undefined {
 }
 
 /**
- * Unifies `connect a.b to c.d;` and `flow [name] [from] a.b to c.d;` — both
- * describe a line between two ports, differing only in an optional leading
- * name and an optional `from` keyword before the source path.
+ * A connector endpoint: an optional `localName ::>` binding prefix (e.g.
+ * `communicationPartnerA ::> woman.verbalExchange`) — kept only for the
+ * bound-to path, since the local end name has no drawing meaning here — a
+ * dotted feature path, and an optional trailing `[multiplicity]` (discarded).
+ */
+function parseConnectorEndpoint(p: ParserState): string {
+  if (p.atIdent() && p.peek(1).value === '::>') {
+    p.advance(); // local end name
+    p.advance(); // '::>'
+  }
+  const path = parseFeaturePath(p);
+  parseOptionalMultiplicity(p);
+  return path;
+}
+
+/**
+ * Unifies every connector-establishing shape this subset resolves:
+ *  - `connect a.b to c.d;` / `flow [name] [from] a.b to c.d;` (binary, with
+ *    an optional leading name and an optional `from` keyword)
+ *  - `::>`-bound endpoints on either of the above
+ *  - n-ary `connect (a ::> x, b ::> y, c ::> z);`
  */
 function parseConnectorLike(p: ParserState): ConnectorNode {
   p.advance(); // 'connect' or 'flow'
+
+  if (p.at('(')) {
+    p.advance();
+    const ends: string[] = [];
+    while (!p.eof() && !p.at(')')) {
+      ends.push(parseConnectorEndpoint(p));
+      if (p.at(',')) p.advance();
+    }
+    if (p.at(')')) p.advance();
+    if (p.at(';')) p.advance();
+    return { ends };
+  }
+
   let name: string | undefined;
   if (!p.at('from') && !p.at('to') && p.peek(1).value === 'from') {
     name = p.advance().value;
   }
   if (p.at('from')) p.advance();
-  const from = parseRawUntil(p, ['to']);
+  const from = parseConnectorEndpoint(p);
   p.expect('to');
-  const to = parseRawUntil(p, [';']);
+  const to = parseConnectorEndpoint(p);
   if (p.at(';')) p.advance();
-  return { name, from, to };
+  return { name, ends: [from, to] };
+}
+
+/**
+ * A `connection [name] [: Type] { ... }` usage — e.g.
+ * `connection child : Child { end mother ::> woman[1]; end father ::> man[1]; }`.
+ * Its own redefined `end name ::> path;` bindings collectively form one
+ * connector once 2+ are seen (the abstract connection IS the relationship
+ * between whatever its ends are bound to); any literal `connect`/`flow`
+ * statements inside contribute their own connectors independently. Both are
+ * appended to `connectors` — the enclosing part's, since a connection usage
+ * has no box of its own to draw against in this subset.
+ */
+function parseConnectionUsage(p: ParserState, connectors: ConnectorNode[]): void {
+  p.expect('connection');
+  let name: string | undefined;
+  if (p.atIdent()) name = p.advance().value;
+  parseOptionalTypeAndMultiplicity(p);
+  if (!p.at('{')) {
+    if (p.at(';')) p.advance();
+    return;
+  }
+  p.advance(); // '{'
+  const boundEnds: string[] = [];
+  for (;;) {
+    skipDocAndComments(p);
+    if (p.at('}')) {
+      p.advance();
+      break;
+    }
+    if (p.eof()) break;
+    if (p.at('end')) {
+      p.advance();
+      if (p.at('part')) p.advance();
+      if (p.atIdent()) p.advance(); // the end's own local name
+      if (p.at('::>')) {
+        p.advance();
+        boundEnds.push(parseConnectorEndpoint(p));
+      } else if (p.at(':') || p.at(':>')) {
+        p.advance();
+        parseQualifiedName(p); // a plain type reference, not a binding
+        parseOptionalMultiplicity(p);
+      }
+      if (p.at(';')) p.advance();
+      continue;
+    }
+    if (p.at('connect') || p.at('flow')) {
+      connectors.push(parseConnectorLike(p));
+      continue;
+    }
+    if (p.at('connection')) {
+      parseConnectionUsage(p, connectors);
+      continue;
+    }
+    skipUnknownMember(p);
+  }
+  if (boundEnds.length >= 2) {
+    connectors.push({ name, ends: boundEnds });
+  }
 }
 
 /** Shared member loop for both `part def Name { ... }` and a bare `part name { ... }` usage-with-body. */
@@ -318,6 +418,10 @@ function parsePartBody(p: ParserState, def: PartDefNode): void {
     }
     if (p.at('connect') || p.at('flow')) {
       def.connectors.push(parseConnectorLike(p));
+      continue;
+    }
+    if (p.at('connection') && p.peek(1).value !== 'def') {
+      parseConnectionUsage(p, def.connectors);
       continue;
     }
     // Nested defs, actions, states, requirements, satisfy, etc. are outside
@@ -469,6 +573,62 @@ function parseInterfaceDef(p: ParserState): InterfaceDefNode {
   return def;
 }
 
+/** `end [part] name [: | :> Type [multiplicity]];` inside a `connection def` body. */
+function parseConnectionEnd(p: ParserState): InterfaceEndNode {
+  p.expect('end');
+  if (p.at('part')) p.advance();
+  const name = p.advance().value;
+  let type: string | undefined;
+  if (p.at(':>') || p.at(':')) {
+    p.advance();
+    type = parseQualifiedName(p);
+    parseOptionalMultiplicity(p);
+  }
+  if (p.at(';')) p.advance();
+  return { name, type };
+}
+
+/**
+ * `connection def Name { end [part] a [:Type]; ...; attribute ...; }` — like
+ * `interface def` but for a plain part-to-part link with no port-compatibility
+ * requirement.
+ */
+function parseConnectionDef(p: ParserState): ConnectionDefNode {
+  p.expect('connection');
+  p.expect('def');
+  const name = p.advance().value;
+  let superType: string | undefined;
+  if (p.at(':>') || p.at(':')) {
+    p.advance();
+    superType = parseQualifiedName(p);
+  }
+  const def: ConnectionDefNode = { kind: 'connectionDef', name, superType, ends: [], attributes: [] };
+  if (p.at('{')) {
+    p.advance();
+    for (;;) {
+      const doc = skipDocAndComments(p);
+      if (doc && !def.doc) def.doc = doc;
+      if (p.at('}')) {
+        p.advance();
+        break;
+      }
+      if (p.eof()) break;
+      if (p.at('end')) {
+        def.ends.push(parseConnectionEnd(p));
+        continue;
+      }
+      if (p.at('attribute')) {
+        def.attributes.push(parseAttribute(p));
+        continue;
+      }
+      skipUnknownMember(p);
+    }
+  } else if (p.at(';')) {
+    p.advance();
+  }
+  return def;
+}
+
 interface ParseContext {
   packageName?: string;
 }
@@ -505,9 +665,21 @@ function parseMembers(p: ParserState, definitions: DefinitionNode[], ctx: ParseC
       definitions.push(parseInterfaceDef(p));
       continue;
     }
+    if (p.at('connection') && p.peek(1).value === 'def') {
+      definitions.push(parseConnectionDef(p));
+      continue;
+    }
     if (p.at('part') && p.peek(1).value !== 'def') {
       const usage = parseTopLevelPartUsage(p);
       if (usage) definitions.push(usage);
+      continue;
+    }
+    if (p.at('connection') && p.peek(1).value !== 'def') {
+      // A bare top-level connection usage has no enclosing part to attach
+      // its connector to in this subset — parse it so it doesn't fall
+      // through to a coarser skip elsewhere, but there's nowhere to draw
+      // the result, so the discovered connector(s) are simply discarded.
+      parseConnectionUsage(p, []);
       continue;
     }
     // Part/attribute usages without a body, actions, requirements, states,

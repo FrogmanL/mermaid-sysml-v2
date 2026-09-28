@@ -2,11 +2,12 @@
 
 An external [Mermaid](https://mermaid.js.org) diagram plugin that renders a
 subset of the [SysML v2](https://www.omg.org/spec/SysMLv2/) textual notation
-— `part def`, `port def`, `interface def`, and part containment/connectors —
-matching the OMG's own graphical notation as closely as this subset's scope
-allows: compartmented definition boxes, rounded usage boxes, a recursive
-composition tree for plain containment, and an internal-block-diagram-style
-container with connector lines where a part's containment also has
+— `part def`, `port def`, `interface def`, `connection def`, and every
+connector-establishing form this subset resolves — matching the OMG's own
+graphical notation as closely as this subset's scope allows: compartmented
+definition boxes, rounded usage boxes, a recursive composition tree for plain
+containment, and an internal-block-diagram-style container with connector
+lines (binary, `::>`-bound, or n-ary) where a part's containment also has
 connectors.
 
 ## Why this exists
@@ -46,31 +47,50 @@ covers:
     parent, org-chart lines fanning down to each child's own box. Recursive:
     a child usage whose own type has further containment expands into its
     own subtree, however deep the data goes (cycle- and depth-guarded).
-  - **With connectors** (`connect a.b to c.d;` and
-    `flow [name] [from] a.b to c.d;`, either form, inside the part's body):
-    an **internal-block-diagram-style container** — one child box per part
-    with port markers, connector lines (orthogonal routing, one lane per
-    connector so they stay legible when several share an endpoint) with an
-    arrowhead at the target and a label for the conveyed item where one can
-    be determined (only the connector path's first two segments resolve the
-    endpoint, e.g. `h.exit.air` → child `h`, port `exit`; a trailing segment
-    like `air` is used only as the label). One level deep only here — see
-    "Known limitations".
+  - **With connectors**: an **internal-block-diagram-style container** — one
+    child box per part with port markers, connector lines (orthogonal
+    routing, one lane per connector so they stay legible when several share
+    an endpoint), an arrowhead at the target, and a label for the conveyed
+    item where one can be determined. One level deep only here — see "Known
+    limitations".
+- **Connectors** — every connector-establishing form this subset resolves,
+  each contributing to the container view above:
+  - `connect a.b to c.d;` and `flow [name] [from] a.b to c.d;`, inside a
+    part's body. Only the endpoint's first two segments resolve it (e.g.
+    `h.exit.air` → child `h`, port `exit`); a trailing segment, if any, is
+    used only as the drawn line's label.
+  - A `::>`-bound end on either form (`connect A ::> x.y to B ::> z.w;`) —
+    the local end name (`A`/`B`) is discarded; only the bound-to path draws.
+  - An n-ary `connect (a ::> x, b ::> y, c ::> z);` — drawn as a small
+    junction dot with one branch per end, no arrowhead (undirected).
+  - A `connection [name] [: Type] { end m ::> x; end f ::> y; }` **usage**
+    (inside a part's body, or nested inside another `connection`) — its own
+    redefined ends collectively form a connector, folded into the enclosing
+    part's connectors once 2 or more are found. A bare (portless) endpoint —
+    `end m ::> someChild;`, no `.port` segment — anchors to that child's own
+    box directly, which is what makes a plain part-to-part connection (no
+    ports at all) drawable.
+  - A bare top-level `connection` usage (not nested in any part) is parsed
+    but has no box to draw against in this subset, so it's discarded.
 - `port def Name { in/out [item|ref] name [:|:>] Type; }`, including a
   conjugated type (`~Type`).
 - `interface def Name { end ...; flow a.b to c.d; }` (flows here stay inside
   the interface's own box as text, since an interface def has no part
   *usages* of its own to draw a line between).
+- `connection def Name { end [part] a [:Type]; ...; attribute ...; }` — like
+  `interface def` but for a plain part-to-part link with no port-compatibility
+  requirement; renders the same way (a leaf box with "attributes"/"ends"
+  compartments).
 - `doc /* ... */` comments (shown as a hover tooltip on the box).
 - `import` statements and quoted (`'...'`) identifiers (parsed/tokenized
   correctly, then ignored).
 
 Everything else — actions, requirements, state machines, views, `satisfy`,
-n-ary/`::>`-bound connectors, port redefinition, expressions beyond a raw
-right-hand side — is outside this subset. The parser skips unrecognized
-constructs resiliently (structurally, brace-aware) rather than failing the
-whole diagram, so a real file mixing supported and unsupported constructs
-still renders what it can.
+variability modeling (`variation`/`variant`), sequence-style `message ... to`
+interactions, port redefinition, expressions beyond a raw right-hand side —
+is outside this subset. The parser skips unrecognized constructs resiliently
+(structurally, brace-aware) rather than failing the whole diagram, so a real
+file mixing supported and unsupported constructs still renders what it can.
 
 ### Validation corpus
 
@@ -97,11 +117,13 @@ during development, not vendored into this repo except where noted) from:
   as realistic usage to parse against.
 - **[GfSE/SysML-v2-Models](https://github.com/GfSE/SysML-v2-Models)** — a
   community-curated collection (Gesellschaft für Systems Engineering),
-  ranging from simple (`example_family/family.sysml`) to genuinely advanced
-  (`SE_Models/VehicleModel.sysml`'s n-ary connectors and `::>`-bound ends,
-  `SE_Models/Drone_BaseArchitecture.sysml`'s multi-package requirement
-  traceability). The advanced end of this repo is where this subset's
-  current limits (below) were found.
+  ranging from simple (`example_family/family.sysml`) to genuinely advanced.
+  `family.sysml` alone is what drove this subset's connector coverage — its
+  `::>`-bound ends, n-ary `connect (...)`, and `connection` usages/defs are
+  all now handled; its bodyless usage-with-inline-connect and variability
+  modeling (`variation`/`variant`) are where this subset's current limits
+  (below) were found. `SE_Models/Drone_BaseArchitecture.sysml` exercises
+  multi-package requirement traceability.
 - `examples/vehicle.mmd` — transcribed from the code block in
   [mermaid-js/mermaid#6317](https://github.com/mermaid-js/mermaid/issues/6317)
   itself, not from either repo above.
@@ -122,11 +144,16 @@ during development, not vendored into this repo except where noted) from:
 - **A container or tree shows only its children**, not its own attributes/
   ports if it happens to have both containment and its own direct members —
   real containers in the corpus so far only had one or the other.
-- Connector endpoints resolve only the `child.port` shape. Anything with
-  `::>` reference bindings, parenthesized n-ary connector tuples
-  (`connect (a ::> b, c ::> d);`), or a path outside the current container
-  silently draws no line (the connector is still in the parsed model, just
-  not visualized).
+- A connector endpoint resolves only against a sibling child within the
+  *same* container (a `child.port`, `::>`-bound, or bare-part path) — a path
+  pointing outside the current container silently draws no line (the
+  connector is still in the parsed model, just not visualized).
+- **A bodyless usage-with-inline-statement isn't parsed** — e.g.
+  `interface name : Type connect A ::> x to B ::> y;` (no braces at all, a
+  single statement). Seen once, in the same advanced family/adoption model
+  that has the `::>`/n-ary forms above; it's skipped structurally like any
+  other unrecognized construct rather than crashing, but its connector isn't
+  extracted.
 - **Composition vs. reference isn't distinguished.** The spec uses a filled
   diamond for composition and a hollow diamond for a non-owning reference
   (see the graphical-notation deck's "References," p. 37); this subset has no
@@ -175,15 +202,19 @@ See `examples/vehicle.mmd` for the part/port/interface-def style (the example
 from the GitHub issue) and `examples/bvm.mmd` for the containment/connector
 style (a real beverage-vending-machine model — its `BVM` part shows the
 connector container, its `ControlUnit` part shows the composition tree, since
-it has containment but no connectors of its own), and `index.html` for a live
-editable demo of both.
+it has containment but no connectors of its own). `examples/features/`
+has one small file per feature cluster (definition/usage styling, the
+composition tree, the connector container, nested packages, resilience
+against unsupported constructs, and every connector form) for a quick visual
+tour of the whole plugin; `index.html`'s dropdown has a "Feature showcase"
+group listing them all.
 
 ## Development
 
 ```bash
 npm install
 npm run dev     # live demo at http://localhost:5173 — pick an example from the dropdown, edits re-render
-npm test        # vitest: parser + renderer tests, including the two example files end to end
+npm test        # vitest: parser + renderer tests, including every example and feature file end to end
 npm run build   # emits dist/mermaid-sysml-v2.core.mjs + .d.ts files
 ```
 
@@ -196,12 +227,11 @@ Natural next steps, roughly in order of value:
    inside an IBD-style container whose own type has further containment and
    connectors currently just shows as a plain box with ports instead of
    expanding.
-2. **Resolve more connector shapes** — at least the `::>`-bound-end form
-   (`connect a ::> b to c ::> d;`), which showed up in a real family/adoption
-   model alongside the plain `child.port` form this already handles.
-3. **Specialization arrow** — draw `part def Foo :> Bar`'s hollow-triangle
+2. **Specialization arrow** — draw `part def Foo :> Bar`'s hollow-triangle
    inheritance arrow between the two definition boxes; the relationship is
    already parsed and available as `superType`.
+3. **Hollow diamond for a reference (non-owning) containment**, contrasted
+   with the filled diamond already drawn for composition.
 4. **Real text measurement** — the renderer currently estimates box width
    from character counts; swapping in `getBBox()`-based measurement (as
    mermaid's own class diagram does) would tighten box sizing.

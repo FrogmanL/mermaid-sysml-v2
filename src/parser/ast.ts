@@ -1,8 +1,10 @@
 /**
  * AST for the SysML v2 textual-notation subset this plugin understands:
- * `part def`, `port def`, `interface def`, a bare top-level/nested `part`
- * usage with a body, their nested `attribute` / `port` / `part` (containment)
- * / `connect` / `flow` / `end` members, and arbitrarily nested `package`s.
+ * `part def`, `port def`, `interface def`, `connection def`, a bare top-
+ * level/nested `part` usage with a body, their nested `attribute` / `port` /
+ * `part` (containment) / `connect` / `flow` / `end` members, a `connection`
+ * usage whose redefined ends form a connector, and arbitrarily nested
+ * `package`s.
  *
  * This is intentionally not a full SysML v2 grammar (see README for scope).
  */
@@ -28,11 +30,19 @@ export interface PartUsageNode {
   multiplicity?: string;
 }
 
-/** A `connect a.b to c.d;` or `flow [name] [from] a.b to c.d;` statement. */
+/**
+ * A connector between two or more ports/parts. Covers every connector-
+ * establishing form this subset understands:
+ *  - `connect a.b to c.d;` / `flow [name] [from] a.b to c.d;` -> ends: [a.b, c.d]
+ *  - `connect (a ::> x, b ::> y, c ::> z);` (n-ary) -> ends: [x, y, z]
+ *  - a `connection name { end m ::> x; end f ::> y; }` usage's redefined
+ *    ends, collected as one connector -> ends: [x, y]
+ * A `::>`-bound end (`A ::> x.y`) keeps only the bound-to path (`x.y`) — the
+ * local end name itself isn't needed to draw a line between ports.
+ */
 export interface ConnectorNode {
   name?: string;
-  from: string;
-  to: string;
+  ends: string[];
 }
 
 export interface PartDefNode {
@@ -82,7 +92,22 @@ export interface InterfaceDefNode {
   flows: ConnectorNode[];
 }
 
-export type DefinitionNode = PartDefNode | PortDefNode | InterfaceDefNode;
+/**
+ * `connection def Name { end [part] a [:Type]; ...; attribute ...; }` — like
+ * `interface def` but for a plain part-to-part link with no port-compatibility
+ * requirement (the `end` keyword optionally followed by `part` is just a role
+ * marker here; both forms parse into the same `InterfaceEndNode` shape).
+ */
+export interface ConnectionDefNode {
+  kind: 'connectionDef';
+  name: string;
+  superType?: string;
+  doc?: string;
+  ends: InterfaceEndNode[];
+  attributes: AttributeNode[];
+}
+
+export type DefinitionNode = PartDefNode | PortDefNode | InterfaceDefNode | ConnectionDefNode;
 
 export interface SysmlModel {
   packageName?: string;

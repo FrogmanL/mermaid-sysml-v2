@@ -79,7 +79,7 @@ describe('parseSysml', () => {
       { name: 'hub', type: 'WheelHubIF' },
     ]);
     expect(mounting.flows).toEqual([
-      { from: 'axleMount.transferredTorque', to: 'hub.appliedTorque' },
+      { ends: ['axleMount.transferredTorque', 'hub.appliedTorque'] },
     ]);
   });
 
@@ -192,9 +192,7 @@ part def BVM {
       { name: 'coinAcceptor', type: 'CoinAcceptor', multiplicity: undefined },
       { name: 'controlUnit', type: 'ControlUnit', multiplicity: undefined },
     ]);
-    expect(def.connectors).toEqual([
-      { name: undefined, from: 'coinAcceptor.coinOut', to: 'controlUnit.coinIn' },
-    ]);
+    expect(def.connectors).toEqual([{ ends: ['coinAcceptor.coinOut', 'controlUnit.coinIn'] }]);
   });
 
   it('parses a part usage multiplicity in either order relative to its type', () => {
@@ -224,7 +222,7 @@ part def RoomContext {
     const def = model.definitions[0];
     if (def.kind !== 'partDef') throw new Error('expected partDef');
     expect(def.connectors).toEqual([
-      { name: 'HallToClass_Air', from: 'h.exit.air', to: 'c.entry.air' },
+      { name: 'HallToClass_Air', ends: ['h.exit.air', 'c.entry.air'] },
     ]);
   });
 
@@ -327,5 +325,111 @@ part drone : Drone {
     expect(roomContext.usageType).toBeUndefined();
     expect(drone.isUsage).toBe(true);
     expect(drone.usageType).toBe('Drone');
+  });
+
+  it('resolves a ::>-bound connector end to just the bound-to path, on both ends', () => {
+    const model = parseSysml(`sysml-v2
+part def Family {
+  connect communicationPartnerA ::> woman.verbalExchange to communicationPartnerB ::> man.verbalExchange;
+}`);
+    const def = model.definitions[0];
+    if (def.kind !== 'partDef') throw new Error('expected partDef');
+    expect(def.connectors).toEqual([
+      { ends: ['woman.verbalExchange', 'man.verbalExchange'] },
+    ]);
+  });
+
+  it('parses an n-ary connect() with ::>-bound ends', () => {
+    const model = parseSysml(`sysml-v2
+part def Family {
+  connect (parent1 ::> woman, adoptiveParent_1 ::> adult, certifiedChild ::> child);
+}`);
+    const def = model.definitions[0];
+    if (def.kind !== 'partDef') throw new Error('expected partDef');
+    expect(def.connectors).toEqual([{ ends: ['woman', 'adult', 'child'] }]);
+  });
+
+  it('folds a connection usage\'s redefined ends into one connector on the enclosing part', () => {
+    const model = parseSysml(`sysml-v2
+part def Family {
+  part woman : Person;
+  part man : Person;
+  connection child : Child {
+    end mother ::> woman[1];
+    end father ::> man[1];
+  }
+}
+part def Person;`);
+    const def = model.definitions[0];
+    if (def.kind !== 'partDef') throw new Error('expected partDef');
+    expect(def.connectors).toEqual([{ name: 'child', ends: ['woman', 'man'] }]);
+  });
+
+  it('folds a nested connection usage inside another connection usage', () => {
+    const model = parseSysml(`sysml-v2
+part def Family {
+  connection outer {
+    connection inner : Child {
+      end mother ::> woman;
+      end father ::> man;
+    }
+  }
+}`);
+    const def = model.definitions[0];
+    if (def.kind !== 'partDef') throw new Error('expected partDef');
+    expect(def.connectors).toEqual([{ name: 'inner', ends: ['woman', 'man'] }]);
+  });
+
+  it('discards a top-level connection usage (no enclosing part to draw it against) without crashing', () => {
+    const model = parseSysml(`sysml-v2
+connection child : Child {
+  end mother ::> woman;
+  end father ::> man;
+}
+part def Person;`);
+    expect(model.definitions.map((d) => d.name)).toEqual(['Person']);
+  });
+
+  it('parses a connection def with named ends and attributes, like interface def but part-to-part', () => {
+    const model = parseSysml(`sysml-v2
+connection def DeviceConn {
+  end part hub : Hub;
+  end part device : Device;
+  attribute bandwidth : Real;
+}
+part def Hub;
+part def Device;`);
+    const conn = model.definitions.find((d) => d.name === 'DeviceConn');
+    if (conn?.kind !== 'connectionDef') throw new Error('expected connectionDef');
+    expect(conn.ends).toEqual([
+      { name: 'hub', type: 'Hub' },
+      { name: 'device', type: 'Device' },
+    ]);
+    expect(conn.attributes).toEqual([{ name: 'bandwidth', type: 'Real', value: undefined }]);
+  });
+
+  it('does not throw on the full family.sysml connector idioms mixed with unsupported ones', () => {
+    // A trimmed excerpt of GfSE/SysML-v2-Models' family.sysml, combining
+    // ::>-bound binary connects, a connection usage with redefined ends, and
+    // an n-ary connect inside a variant — the last of which (variation
+    // modeling) stays out of scope and should just be skipped structurally.
+    expect(() =>
+      parseSysml(`sysml-v2
+package Family {
+  part woman[1] : Person;
+  part man[1] : Person;
+  connection child : Child {
+    end mother ::> woman[1];
+    end father ::> man[1];
+  }
+  interface verbalAdultCommunicationActionWoman : VerbalCommunication
+    connect communicationPartnerA ::> woman.verbalExchange to communicationPartnerB ::> man.verbalExchange;
+  variation part adoption_certificate : Adoption_Certificate {
+    variant connection adoption_certificate_TypeC : Adoption_Certificate
+      connect (parent1 ::> woman, parent2 ::> man, certifiedChild ::> child);
+  }
+}
+part def Person;`)
+    ).not.toThrow();
   });
 });

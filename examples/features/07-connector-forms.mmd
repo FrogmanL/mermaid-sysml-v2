@@ -1,0 +1,48 @@
+sysml-v2
+// Feature: every connector-establishing form this subset resolves.
+// AdultLink shows a ::>-bound binary connect (the local end names
+// communicationPartnerA/B are discarded, only the bound-to ports matter).
+// ChildLink shows a connection usage whose own redefined `end ... ::> ...;`
+// bindings form the connector — Entity has no ports at all, so each end
+// anchors to that part's own box (the bare-part fallback; contrast with
+// AdultLink's port-anchored line). AdoptionCert shows an n-ary connect():
+// three branches meeting at one junction dot, no arrowhead (undirected).
+// DeviceConn is a connection def, analogous to an interface def but for a
+// plain part-to-part link with no port requirement.
+package ConnectorForms {
+  part def AdultLink {
+    part woman : Person;
+    part man : Person;
+    connect communicationPartnerA ::> woman.exchange to communicationPartnerB ::> man.exchange;
+  }
+
+  part def ChildLink {
+    part mother : Entity;
+    part father : Entity;
+    connection child : Child {
+      end m ::> mother;
+      end f ::> father;
+    }
+  }
+
+  part def AdoptionCert {
+    part parent1 : Entity;
+    part parent2 : Entity;
+    part certifiedChild : Entity;
+    connect (p1 ::> parent1, p2 ::> parent2, c ::> certifiedChild);
+  }
+
+  part def Person {
+    port exchange : ExchangePort;
+  }
+  port def ExchangePort;
+  part def Entity;
+
+  connection def DeviceConn {
+    end part hub : Hub;
+    end part device : Device;
+    attribute bandwidth : Real;
+  }
+  part def Hub;
+  part def Device;
+}

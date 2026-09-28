@@ -117,6 +117,12 @@ interface LeafBox {
   compartments: RenderCompartment[];
 }
 
+/** "a → b" for the common binary case (preserves the directional arrow for flows); "a ↔ b ↔ c" for an n-ary connector. */
+function connectorSummary(c: ConnectorNode): string {
+  if (c.ends.length === 2) return `${c.ends[0]} → ${c.ends[1]}`;
+  return c.ends.join(' ↔ ');
+}
+
 function toLeafBox(def: DefinitionNode): LeafBox {
   if (def.kind === 'partDef') {
     const { stereotype, displayName } = partStereotypeAndName(def);
@@ -151,21 +157,36 @@ function toLeafBox(def: DefinitionNode): LeafBox {
     }
     return { stereotype: 'port def', name: def.name, rounded: false, doc: def.doc, compartments };
   }
-  // interfaceDef
+  if (def.kind === 'interfaceDef') {
+    const compartments: RenderCompartment[] = [];
+    if (def.ends.length) {
+      compartments.push({
+        label: 'ends',
+        lines: def.ends.map((e) => (e.type ? `${e.name} : ${e.type}` : e.name)),
+      });
+    }
+    if (def.flows.length) {
+      compartments.push({ label: 'flows', lines: def.flows.map(connectorSummary) });
+    }
+    return { stereotype: 'interface def', name: def.name, rounded: false, doc: def.doc, compartments };
+  }
+  // connectionDef
   const compartments: RenderCompartment[] = [];
+  if (def.attributes.length) {
+    compartments.push({
+      label: 'attributes',
+      lines: def.attributes.map((a) =>
+        a.value !== undefined ? `${a.name} = ${a.value}` : a.type ? `${a.name} : ${a.type}` : a.name
+      ),
+    });
+  }
   if (def.ends.length) {
     compartments.push({
       label: 'ends',
       lines: def.ends.map((e) => (e.type ? `${e.name} : ${e.type}` : e.name)),
     });
   }
-  if (def.flows.length) {
-    compartments.push({
-      label: 'flows',
-      lines: def.flows.map((f) => `${f.from} → ${f.to}`),
-    });
-  }
-  return { stereotype: 'interface def', name: def.name, rounded: false, doc: def.doc, compartments };
+  return { stereotype: 'connection def', name: def.name, rounded: false, doc: def.doc, compartments };
 }
 
 function measureLeafBox(box: LeafBox): { width: number; height: number } {
@@ -296,15 +317,18 @@ function measureChildren(children: ContainerChildInput[]): {
 }
 
 /**
- * Resolves a `child.port[.item]` connector endpoint to the drawn coordinates
- * of that child's port marker, plus the trailing `.item` segment if present
- * (used as a flow label — see `connectorLabel`). Only `child.port` itself is
- * used for resolution; a third segment (an individual flow item within the
- * port, as in `h.exit.air`) is outside this subset's rendering granularity.
+ * Resolves a connector endpoint to the drawn coordinates of a connection
+ * point on one of this container's children, plus a trailing `.item`
+ * segment if present (used as a flow label — see `connectorLabel`):
+ *  - `child.port[.item]` resolves to that port's marker (the common case).
+ *  - a bare `child` (no port segment — e.g. a `connection` usage's redefined
+ *    end bound directly to a part, as in `end mother ::> woman;`) resolves
+ *    to an anchor at the child's own bottom-center, as if it had one
+ *    unlabeled implicit port. This is what makes a plain part-to-part
+ *    connection (no ports involved at all) drawable.
  * Returns `undefined` (and the connector is silently skipped) for anything
- * this can't resolve: paths outside this container, or SysML v2 constructs
- * beyond `child.port` this subset doesn't model (n-ary connectors, `::>`-
- * bound ends, etc.).
+ * else this can't resolve: a path outside this container, or a named port
+ * that doesn't exist on the resolved child.
  */
 function resolvePortPoint(
   children: ChildLayout[],
@@ -312,14 +336,16 @@ function resolvePortPoint(
   childrenY: number
 ): { x: number; y: number; item?: string } | undefined {
   const dot = endpoint.indexOf('.');
-  if (dot === -1) return undefined;
-  const childName = endpoint.slice(0, dot);
+  const childName = dot === -1 ? endpoint : endpoint.slice(0, dot);
+  const child = children.find((c) => c.name === childName);
+  if (!child) return undefined;
+  if (dot === -1) {
+    return { x: child.x + child.width / 2, y: childrenY + child.height };
+  }
   const rest = endpoint.slice(dot + 1);
   const nextDot = rest.indexOf('.');
   const portName = nextDot === -1 ? rest : rest.slice(0, nextDot);
   const item = nextDot === -1 ? undefined : rest.slice(nextDot + 1);
-  const child = children.find((c) => c.name === childName);
-  if (!child) return undefined;
   const port = child.ports.find((p) => p.name === portName);
   if (!port) return undefined;
   return { x: child.x + port.x, y: childrenY + child.height, item };
@@ -349,35 +375,44 @@ function prepareContainerBox(
   const labelBottomY = childrenY + maxHeight + PORT_LABEL_H;
 
   // Resolve connectors to drawable lines up front, deduping identical
-  // child+port pairs — several item flows often share one structural
-  // connector (see README), and would otherwise draw as overlapping lines.
-  // Each gets its own horizontal "fan" band below the port labels, both to
-  // keep the routing legible when one child has several connectors, and so
-  // the curve doesn't cut through the label text sitting just below the row.
-  const seenPairs = new Set<string>();
-  const lines: { x1: number; y1: number; x2: number; y2: number; midY: number; label?: string }[] = [];
+  // endpoint sets — several item flows often share one structural connector
+  // (see README), and would otherwise draw as overlapping lines. Each gets
+  // its own horizontal "fan" band below the port labels, both to keep the
+  // routing legible when one child has several connectors, and so the line
+  // doesn't cut through the label text sitting just below the row.
+  const seenKeys = new Set<string>();
+  const binaryLines: { x1: number; y1: number; x2: number; y2: number; midY: number; label?: string }[] = [];
+  const junctions: { points: { x: number; y: number }[]; laneY: number; label?: string }[] = [];
   for (const c of connectors) {
-    const from = resolvePortPoint(layouts, c.from, childrenY);
-    const to = resolvePortPoint(layouts, c.to, childrenY);
-    if (!from || !to) continue;
-    const key = [`${from.x},${from.y}`, `${to.x},${to.y}`].sort().join('|');
-    if (seenPairs.has(key)) continue;
-    seenPairs.add(key);
-    const midY = labelBottomY + CONNECTOR_BASE_DROOP + lines.length * CONNECTOR_FAN_STEP;
-    lines.push({
-      x1: from.x,
-      y1: from.y,
-      x2: to.x,
-      y2: to.y,
-      midY,
-      label: connectorLabel(c, from.item, to.item),
-    });
+    const resolved = c.ends.map((e) => resolvePortPoint(layouts, e, childrenY)).filter((p) => p !== undefined);
+    if (resolved.length < 2) continue;
+    const key = resolved
+      .map((p) => `${p.x},${p.y}`)
+      .sort()
+      .join('|');
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    const laneY = labelBottomY + CONNECTOR_BASE_DROOP + (binaryLines.length + junctions.length) * CONNECTOR_FAN_STEP;
+    if (resolved.length === 2) {
+      const [from, to] = resolved;
+      binaryLines.push({
+        x1: from.x,
+        y1: from.y,
+        x2: to.x,
+        y2: to.y,
+        midY: laneY,
+        label: connectorLabel(c, from.item, to.item),
+      });
+    } else {
+      // n-ary connector (`connect (a ::> x, b ::> y, c ::> z);`): drawn as a
+      // junction point with one branch per end, since there's no single
+      // "from"/"to" pair to route between.
+      junctions.push({ points: resolved, laneY, label: c.name });
+    }
   }
 
-  const height =
-    (lines.length
-      ? Math.max(...lines.map((l) => l.midY))
-      : labelBottomY + CONNECTOR_BASE_DROOP) + CONTAINER_PAD;
+  const allLaneYs = [...binaryLines.map((l) => l.midY), ...junctions.map((j) => j.laneY)];
+  const height = (allLaneYs.length ? Math.max(...allLaneYs) : labelBottomY + CONNECTOR_BASE_DROOP) + CONTAINER_PAD;
 
   return {
     width,
@@ -395,7 +430,7 @@ function prepareContainerBox(
       // An arrowhead marks the `to` end (flow direction), and the conveyed
       // item's name (or the connector's own name, if given) labels the wire,
       // matching the spec's own "Connecting Parts" notation.
-      for (const line of lines) {
+      for (const line of binaryLines) {
         const midY = line.midY;
         node
           .append('path')
@@ -420,6 +455,37 @@ function prepareContainerBox(
             .attr('text-anchor', 'middle')
             .attr('font-size', '9px')
             .text(line.label);
+        }
+      }
+
+      // N-ary connector: one branch per end, meeting at a small junction dot.
+      // No arrowhead (undirected) — a plain filled circle marks the join,
+      // matching the general UML convention for an n-ary association.
+      for (const junction of junctions) {
+        const xs = junction.points.map((pt) => pt.x);
+        const junctionX = xs.reduce((a, b) => a + b, 0) / xs.length;
+        const junctionY = junction.laneY;
+        for (const pt of junction.points) {
+          node
+            .append('path')
+            .attr('class', 'connector')
+            .attr('d', `M ${pt.x},${pt.y} L ${pt.x},${junctionY} L ${junctionX},${junctionY}`);
+        }
+        node
+          .append('circle')
+          .attr('class', 'connector-junction')
+          .attr('cx', junctionX)
+          .attr('cy', junctionY)
+          .attr('r', ARROW_SIZE * 0.8);
+        if (junction.label) {
+          node
+            .append('text')
+            .attr('class', 'connector-label')
+            .attr('x', junctionX)
+            .attr('y', junctionY - ARROW_SIZE - 3)
+            .attr('text-anchor', 'middle')
+            .attr('font-size', '9px')
+            .text(junction.label);
         }
       }
 
