@@ -118,6 +118,11 @@ const getStyles = (options: any): string => `
 .sysml-v2 rect.action-fork-join {
   fill: ${options.nodeBorder ?? options.primaryBorderColor ?? '#999'};
 }
+.sysml-v2 polygon.action-message {
+  fill: ${options.mainBkg ?? options.primaryColor ?? '#eee'};
+  stroke: ${options.nodeBorder ?? options.primaryBorderColor ?? '#999'};
+  stroke-width: 1px;
+}
 `;
 
 export default getStyles;

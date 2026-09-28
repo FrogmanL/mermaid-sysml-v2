@@ -685,4 +685,44 @@ action def ChargeBattery {
     expect(labels).toContain('loop charging');
     expect(node.querySelectorAll('line.succession-line').length).toBe(2);
   });
+
+  it('renders the real Messaging Example end to end: accept/send as pentagon nodes in the succession chain', () => {
+    db.parse(`sysml-v2
+action def Focus { in item scene : Scene; out item image : Image; }
+action def Shoot { in item image : Image; out item picture : Picture; }
+action def TakePicture;
+
+action screen;
+
+action takePicture : TakePicture {
+  action trigger accept scene : Scene;
+
+  then action focus : Focus {
+    in item scene = trigger.scene;
+    out item image;
+  }
+
+  flow from focus.image to shoot.image;
+
+  then action shoot : Shoot {
+    in item image;
+    out item picture;
+  }
+
+  then send new Show(shoot.picture) to screen;
+}`);
+    select(document.body).append('svg').attr('id', 'sysml-test-39');
+    expect(() => draw('', 'sysml-test-39', '0.0.0')).not.toThrow();
+
+    const node = findNodeByTitle(document.querySelector('#sysml-test-39')!, 'takePicture : TakePicture');
+    // One concave pentagon (accept) and one convex pentagon (send) — both
+    // use the same `action-message` class, distinguished only by their
+    // polygon points (notch left vs. tip right).
+    expect(node.querySelectorAll('polygon.action-message').length).toBe(2);
+    const labels = Array.from(node.querySelectorAll('.member')).map((el) => el.textContent);
+    expect(labels).toContain('trigger: accept scene : Scene');
+    expect(labels?.some((l) => l?.startsWith('send') && l?.includes('to screen'))).toBe(true);
+    // trigger -> focus -> shoot -> send.
+    expect(node.querySelectorAll('line.succession-line').length).toBe(3);
+  });
 });

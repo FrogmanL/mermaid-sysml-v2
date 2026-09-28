@@ -271,19 +271,54 @@ export interface ActionParamNode {
 }
 
 /**
+ * `action name accept param [: Type] [via port];` — a shorthand action
+ * usage that IS an accept-event action, rather than an ordinary typed/
+ * bodied one. Confirmed against the OMG's own training corpus's
+ * `"21. Asynchronous Messaging"` (`Messaging Example.sysml`/
+ * `Messaging with Ports.sysml`). Drawn as a concave-pentagon flowchart
+ * node, the standard UML/SysML shape for this action kind.
+ */
+export interface AcceptClause {
+  param: string;
+  type?: string;
+  via?: string;
+}
+
+/**
  * A nested `action name [: Type] { ... }` usage inside an action's body —
  * drawn as one flowchart node, not expanded recursively (this subset's
  * activity support is one level deep, same convention as the connector
  * container — see README). `isLoop`/`until` cover a
  * `loop action name { ... } until cond;` statement instead — its own body
  * is skipped structurally (same one-level-deep reasoning), but it still
- * gets a flowchart node of its own, labeled to show it's a loop.
+ * gets a flowchart node of its own, labeled to show it's a loop. `accept`
+ * covers the shorthand form above instead of an ordinary type/body.
  */
 export interface ActionUsageNode {
   name: string;
   type?: string;
   isLoop?: boolean;
   until?: string;
+  accept?: AcceptClause;
+}
+
+/**
+ * `send <payload> [to <target>] [via <port>];` — an asynchronous message
+ * send, confirmed against the same training corpus as `AcceptClause`.
+ * Always anonymous in the grammar (unlike an `action`, it has no name of
+ * its own), so it gets a synthesized id (`__send1__`, ...) to participate
+ * in the succession graph like any other step. Drawn as a convex-pentagon
+ * flowchart node. `to`/`via` are shown on the node as text, not resolved to
+ * a cross-box arrow — the target is typically a sibling top-level action
+ * (like `screen` in `Messaging Example.sysml`), outside the sending
+ * action's own flowchart namespace, which this subset doesn't draw an edge
+ * across — see README "Known limitations".
+ */
+export interface SendUsage {
+  id: string;
+  payload?: string;
+  to?: string;
+  via?: string;
 }
 
 /**
@@ -343,6 +378,8 @@ export interface ActionDefNode {
   flows: ConnectorNode[];
   /** `decide`/`merge`/`fork`/`join` nodes encountered in this action's body. */
   controlNodes: ControlNodeUsage[];
+  /** `send ...;` statements encountered in this action's body. */
+  sends: SendUsage[];
   /** Seen a `first start;` statement — draws a filled start node. */
   hasStart?: boolean;
   /** Seen a `then done;` (or `first ... then done;`) statement — draws a bordered "final" node. */

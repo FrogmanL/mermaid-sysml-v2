@@ -8,6 +8,7 @@ import type {
   ConnectorNode,
   DefinitionNode,
   PartUsageNode,
+  SendUsage,
   TraceabilityNode,
   TypeRelation,
   UseCaseActorNode,
@@ -1037,6 +1038,7 @@ const ACTION_SUCC_ARROW_WIDTH = 7;
 const ACTION_DIAMOND_SIZE = 22;
 const ACTION_BAR_WIDTH = 50;
 const ACTION_BAR_HEIGHT = 8;
+const ACTION_MESSAGE_NOTCH = 10;
 
 function actionStereotypeAndName(def: ActionDefNode): { stereotype: string; displayName: string } {
   if (def.isUsage) {
@@ -1046,13 +1048,26 @@ function actionStereotypeAndName(def: ActionDefNode): { stereotype: string; disp
 }
 
 function actionUsageLabel(a: ActionUsageNode): string {
+  if (a.accept) {
+    const via = a.accept.via ? ` via ${a.accept.via}` : '';
+    return `${a.name}: accept ${a.accept.param}${typeSuffix(a.accept.type, undefined)}${via}`;
+  }
   if (a.isLoop) return `loop ${a.name}`;
   return a.type ? `${a.name} : ${a.type}` : a.name;
 }
 
+/** `send <payload> [to <target>] [via <port>];` shown as one line — `to`/`via` are text here, not a cross-box arrow (see `SendUsage`'s doc comment). */
+function sendUsageLabel(s: SendUsage): string {
+  const parts = ['send'];
+  if (s.payload) parts.push(s.payload);
+  if (s.to) parts.push(`to ${s.to}`);
+  if (s.via) parts.push(`via ${s.via}`);
+  return parts.join(' ');
+}
+
 interface ActionFlowNode {
   id: string;
-  kind: 'start' | 'done' | 'action' | 'decide' | 'merge' | 'fork' | 'join';
+  kind: 'start' | 'done' | 'action' | 'decide' | 'merge' | 'fork' | 'join' | 'accept' | 'send';
   label?: string;
   width: number;
   height: number;
@@ -1065,8 +1080,16 @@ function buildActionFlowNodes(def: ActionDefNode): ActionFlowNode[] {
   }
   for (const a of def.actions) {
     const label = actionUsageLabel(a);
-    const width = Math.max(ACTION_NODE_MIN_WIDTH, estimateTextWidth(label, 11, true) + ACTION_NODE_PAD * 2);
-    nodes.push({ id: a.name, kind: 'action', label, width, height: ACTION_NODE_HEIGHT });
+    const width =
+      Math.max(ACTION_NODE_MIN_WIDTH, estimateTextWidth(label, 11, true) + ACTION_NODE_PAD * 2) +
+      (a.accept ? ACTION_MESSAGE_NOTCH : 0);
+    nodes.push({ id: a.name, kind: a.accept ? 'accept' : 'action', label, width, height: ACTION_NODE_HEIGHT });
+  }
+  for (const s of def.sends) {
+    const label = sendUsageLabel(s);
+    const width =
+      Math.max(ACTION_NODE_MIN_WIDTH, estimateTextWidth(label, 11, true) + ACTION_NODE_PAD * 2) + ACTION_MESSAGE_NOTCH;
+    nodes.push({ id: s.id, kind: 'send', label, width, height: ACTION_NODE_HEIGHT });
   }
   for (const c of def.controlNodes) {
     if (c.kind === 'decide' || c.kind === 'merge') {
@@ -1184,6 +1207,51 @@ function drawActionNode(node: G, n: PositionedActionNode): void {
       .attr('y', n.y)
       .attr('width', n.width)
       .attr('height', n.height);
+    return;
+  }
+  if (n.kind === 'send') {
+    // A convex pentagon — a rectangle with the right edge replaced by an
+    // outward-pointing tip — the standard UML/SysML shape for a send-signal
+    // action.
+    const tipX = n.x + n.width;
+    const shoulderX = n.x + n.width - ACTION_MESSAGE_NOTCH;
+    node
+      .append('polygon')
+      .attr('class', 'action-message')
+      .attr(
+        'points',
+        `${n.x},${n.y} ${shoulderX},${n.y} ${tipX},${cy} ${shoulderX},${n.y + n.height} ${n.x},${n.y + n.height}`
+      );
+    node
+      .append('text')
+      .attr('class', 'member')
+      .attr('x', n.x + (n.width - ACTION_MESSAGE_NOTCH) / 2)
+      .attr('y', cy + 4)
+      .attr('text-anchor', 'middle')
+      .attr('font-size', '11px')
+      .text(n.label ?? '');
+    return;
+  }
+  if (n.kind === 'accept') {
+    // A concave pentagon — a rectangle with a notch cut into the left
+    // edge — the standard UML/SysML shape for an accept-event action,
+    // complementary to `send`'s outward tip.
+    const notchX = n.x + ACTION_MESSAGE_NOTCH;
+    node
+      .append('polygon')
+      .attr('class', 'action-message')
+      .attr(
+        'points',
+        `${notchX},${n.y} ${n.x + n.width},${n.y} ${n.x + n.width},${n.y + n.height} ${notchX},${n.y + n.height} ${n.x},${cy}`
+      );
+    node
+      .append('text')
+      .attr('class', 'member')
+      .attr('x', notchX + (n.width - ACTION_MESSAGE_NOTCH) / 2)
+      .attr('y', cy + 4)
+      .attr('text-anchor', 'middle')
+      .attr('font-size', '11px')
+      .text(n.label ?? '');
     return;
   }
   boxRect(node, n.x, n.y, n.width, n.height, true);
@@ -1328,7 +1396,10 @@ function toRenderList(definitions: DefinitionNode[]): RenderEntry[] {
     if (def.kind === 'useCaseDef') {
       return { box: prepareUseCaseBox(def), def };
     }
-    if (def.kind === 'actionDef' && (def.actions.length || def.hasStart || def.hasDone || def.controlNodes.length)) {
+    if (
+      def.kind === 'actionDef' &&
+      (def.actions.length || def.hasStart || def.hasDone || def.controlNodes.length || def.sends.length)
+    ) {
       return { box: prepareActionFlowBox(def), def };
     }
     return { box: prepareLeafBox(def), def };

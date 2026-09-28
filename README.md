@@ -8,17 +8,18 @@ establishing form this subset resolves, specialization (`:>`)/subsetting
 (`:>`)/redefinition (`:>>`), requirement/use-case traceability (`satisfy`/
 `verify`/`trace`/`allocate`/`include`, plus requirement derivation), and
 activity/action diagrams — succession (plain and guarded), start/done, data
-flow, and the `decide`/`merge`/`fork`/`join` control-node vocabulary —
-matching the OMG's own graphical notation as closely as this subset's scope
-allows: compartmented definition boxes, rounded usage boxes, a recursive
-composition tree for plain containment, an internal-block-diagram-style
-container with connector lines (binary, `::>`-bound, or n-ary) where a part's
-containment also has connectors, a hollow-triangle generalization arrow
-between two definition boxes that specialize one another, dashed dependency
-arrows for requirement/use-case traceability, stick-figure actors with a
-plain association line for use cases, and a genuine flowchart — start/done
-nodes, decision/merge diamonds, fork/join bars, solid succession arrows,
-dashed data-flow arrows — for actions.
+flow, the `decide`/`merge`/`fork`/`join` control-node vocabulary, and
+asynchronous `send`/`accept` messaging — matching the OMG's own graphical
+notation as closely as this subset's scope allows: compartmented definition
+boxes, rounded usage boxes, a recursive composition tree for plain
+containment, an internal-block-diagram-style container with connector lines
+(binary, `::>`-bound, or n-ary) where a part's containment also has
+connectors, a hollow-triangle generalization arrow between two definition
+boxes that specialize one another, dashed dependency arrows for requirement/
+use-case traceability, stick-figure actors with a plain association line for
+use cases, and a genuine flowchart — start/done nodes, decision/merge
+diamonds, fork/join bars, concave/convex message pentagons, solid succession
+arrows, dashed data-flow arrows — for actions.
 
 ## Why this exists
 
@@ -191,8 +192,9 @@ covers:
     limitations").
 - **Activity/action diagrams** — grounded against the OMG's own training
   corpus (`Systems-Modeling/SysML-v2-Release/sysml/src/training/
-  "14. Action Definitions"` through `"17. Control"`):
-  - `action def Name [:> Super] { in/out params; nested action usages; flow ...; first/then succession; decide/merge/fork/join; done; }`,
+  "14. Action Definitions"` through `"17. Control"`, plus
+  `"21. Asynchronous Messaging"` for `send`/`accept`):
+  - `action def Name [:> Super] { in/out params; nested action usages; flow ...; first/then succession; decide/merge/fork/join; send/accept; done; }`,
     or a bare `action name : Type { ... }` usage (discarded when body-less,
     like a part usage). With no flowchart content (no succession/start/done/
     nested actions/control nodes), it's a plain leaf box («action def»/
@@ -233,18 +235,32 @@ covers:
     items, drawn as a dashed arrow (reusing the same shape built for
     satisfy/verify/trace/allocate/include/derive), distinct from a solid
     succession arrow.
+  - **`send`/`accept`** — asynchronous messaging, confirmed against the OMG's
+    own `Messaging Example.sysml`/`Messaging with Ports.sysml`: `action name
+    accept param [: Type] [via port];` (a shorthand action usage that *is*
+    an accept-event action) draws as a concave-pentagon node; a bare `send
+    <payload> [to target] [via port];` (always anonymous — it gets a
+    synthesized id, like a control node) draws as a convex-pentagon node —
+    the standard, complementary UML/SysML shapes for these two action
+    kinds. Both participate in the succession chain exactly like a plain
+    action node. `to`/`via` show as text on the node; they aren't resolved
+    to a cross-box arrow at the addressee (`screen`, say) — see "Known
+    limitations."
   - **Deliberately out of scope**: `bind` (data binding — parsed and
     discarded, not drawn) and expanding a `loop`'s own body.
 - `doc /* ... */` comments (shown as a hover tooltip on the box).
 - `import` statements and quoted (`'...'`) identifiers (parsed/tokenized
   correctly, then ignored).
 
-Everything else — `bind`, a `loop`'s own body, sequence diagrams, state
-machines, views, `copy`, variability modeling (`variation`/`variant`),
-sequence-style `message ... to` interactions, port redefinition, expressions
-beyond a raw right-hand side — is outside this subset. The parser skips
-unrecognized constructs resiliently (structurally, brace-aware) rather than
-failing the whole diagram, so a real file mixing
+Everything else — `item def` (a real gap, not a guess: the OMG's own
+messaging examples that drove `send`/`accept` above also declare `item def
+Scene;`-style item definitions, which this subset parses past and doesn't
+render), `bind`, a `loop`'s own body, `send`/`accept`'s own cross-box
+delivery arrow, sequence diagrams as their own dedicated view, state
+machines, views, `copy`, variability modeling (`variation`/`variant`), port
+redefinition, expressions beyond a raw right-hand side — is outside this
+subset. The parser skips unrecognized constructs resiliently (structurally,
+brace-aware) rather than failing the whole diagram, so a real file mixing
 supported and unsupported constructs still renders what it can.
 
 ### Validation corpus
@@ -267,12 +283,13 @@ use-case box's own compartmented-rectangle style — like the requirement
 box — wasn't independently checked against this deck's own Use Case Diagram
 pages. The action flowchart's node shapes (filled start circle, bordered
 "final" circle, rounded action box, unfilled decision/merge diamond, filled
-fork/join bar, solid succession arrow) follow the standard, stable UML/SysML
-activity-diagram convention rather than this subset's own invention, same
-reasoning as the use-case actors — but, also like use cases, wasn't
-independently checked against this deck's own Action/Activity Diagram pages.
-Everything else from page 48 on (remaining behavior notation, plus sequence
-diagrams entirely) is still out of scope here.
+fork/join bar, concave/convex message pentagon, solid succession arrow)
+follow the standard, stable UML/SysML activity-diagram convention rather
+than this subset's own invention, same reasoning as the use-case actors —
+but, also like use cases, wasn't independently checked against this deck's
+own Action/Activity Diagram pages. Everything else from page 48 on
+(remaining behavior notation, plus sequence diagrams entirely) is still out
+of scope here.
 
 Checked textual-syntax coverage against real `.sysml` files (read locally
 during development, not vendored into this repo except where noted) from:
@@ -297,8 +314,14 @@ during development, not vendored into this repo except where noted) from:
   `Decision Example.sysml` and `Fork Join Example.sysml` for `decide`/
   `merge` and `fork`/`join` respectively (both parse and render end to end
   now — see the regression tests citing them); `Control Structures
-  Example.sysml` for `loop`. `"18. Action Performance"` through
-  `"22. Opaque Actions"` weren't read; likely more out-of-scope territory.
+  Example.sysml` for `loop`. `training/"21. Asynchronous Messaging"`
+  (`Messaging Example.sysml`, `Messaging with Ports.sysml`) drove `send`/
+  `accept` specifically, and is also where the `item def` gap above was
+  found — both files declare `item def Scene;`-style items this subset
+  doesn't render. `"18. Action Performance"` (introduces `perform`/
+  `references` — a part instance performing a shared sub-action, the likely
+  real backing for a proper multi-lifeline Sequence View) and
+  `"22. Opaque Actions"` weren't incorporated yet; see "Extending this."
 - **[GfSE/SysML-v2-Models](https://github.com/GfSE/SysML-v2-Models)** — a
   community-curated collection (Gesellschaft für Systems Engineering),
   ranging from simple (`example_family/family.sysml`) to genuinely advanced.
@@ -427,6 +450,16 @@ during development, not vendored into this repo except where noted) from:
   connector container: a nested `action name : Type { ... }` becomes one
   flowchart node showing just its name, not its own further-nested actions,
   successions, or flows.
+- **`item def` isn't implemented at all.** Both of the OMG's own messaging
+  examples that drove `send`/`accept` declare `item def Scene;`-style items
+  as message payload types; these parse past (structurally skipped, like
+  any other unrecognized top-level construct) but never get a box, even
+  though `send`/`accept` referencing them now do.
+- **A `send`'s `to`/`via` target isn't resolved to a cross-box arrow** — only
+  shown as text on the send node. The target (`screen` in the OMG's own
+  `Messaging Example.sysml`) is typically a sibling top-level action outside
+  the sending action's own flowchart namespace, the same cross-namespace
+  problem noted above for traceability paths through an instance's type.
 
 ## Usage
 
@@ -476,9 +509,9 @@ one small file per feature cluster (definition/usage styling, the
 composition tree, the connector container, nested packages, resilience
 against unsupported constructs, every connector form, specialization
 arrows/subsets/redefines, requirements/traceability, attribute def/enum def,
-use cases, action flowcharts, and decide/merge/fork/join/loop) for a quick
-visual tour of the whole plugin; `index.html`'s dropdown has a "Feature
-showcase" group listing them all.
+use cases, action flowcharts, decide/merge/fork/join/loop, and send/accept
+messaging) for a quick visual tour of the whole plugin; `index.html`'s
+dropdown has a "Feature showcase" group listing them all.
 
 ## Development
 
@@ -493,49 +526,62 @@ npm run build   # emits dist/mermaid-sysml-v2.core.mjs + .d.ts files
 
 Natural next steps, roughly in order of value:
 
-1. **Sequence diagrams** — not scoped at all yet; the next diagram type to
-   ground against real examples (the OMG's own training corpus almost
-   certainly has one, same as every other diagram kind here) before
-   designing anything. Likely its own rendering concern again — lifelines
-   and messages over time, not a flowchart or a compartmented box.
-2. **Order/sequencing between a use case's steps** — each `include`/nested
+1. **A real, multi-lifeline Sequence View.** `send`/`accept` (see "Scope"
+   above) are the message vocabulary, now drawn as pentagon nodes inside a
+   single action's own flowchart — but a genuine sequence diagram shows
+   *multiple participants* as parallel lifelines with messages crossing
+   between them over a shared time axis, which is a different rendering
+   paradigm again (like the jump from compartmented boxes to the action
+   flowchart was). The likely missing piece to properly attribute which
+   participant does what: `perform`/`references` (grounded from the OMG's
+   own `training/"18. Action Performance"/Action Performance Example.sysml`
+   — a part instance "performing" a named sub-action of a shared behavior,
+   e.g. `part f : AutoFocus { perform takePhoto.focus; }`), not yet parsed
+   at all. This would also be what finally resolves a `send`'s `to`/`via`
+   cross-box delivery target (see "Known limitations").
+2. **`item def`** — a real, evidenced gap (see "Known limitations"): both of
+   the OMG's own messaging examples that drove `send`/`accept` declare
+   `item def`-style items as message payloads. Same shape as `attribute
+   def`/`enum def` (a standalone definition, leaf box), so likely a cheap
+   addition once picked up.
+3. **Order/sequencing between a use case's steps** — each `include`/nested
    `use case` step now draws its own relationship (see "Scope" above), but
    not the `first`/`then`/`done` order they actually run in. Reusing the
    activity control-flow layout already built for actions is the likely
    path here, once it's worth the cost of a second flowchart-shaped
    rendering path for what's still fundamentally a use-case diagram.
-3. **Resolve a `by`/`to` traceability path through an instance's type**, not
+4. **Resolve a `by`/`to` traceability path through an instance's type**, not
    just a simple name — `examples/bvm.mmd`'s own `satisfy req001 by
    bvm.coinAcceptor;` needs this to ever draw an arrow: look up `bvm`'s
    recorded type (currently discarded, since a body-less top-level part
    usage has nothing else worth keeping today), then resolve `coinAcceptor`
    as a child within that type's own rendered container/tree box.
-4. **Recursive containment for the connector container**, not just the
+5. **Recursive containment for the connector container**, not just the
    composition tree — the tree already recurses (see "Scope" above); a child
    inside an IBD-style container whose own type has further containment and
    connectors currently just shows as a plain box with ports instead of
    expanding.
-5. **Real edge routing for the specialization/dependency/succession
+6. **Real edge routing for the specialization/dependency/succession
    arrows**, instead of a straight line clipped to each box's border — would
    fix the visual crossing noted in "Known limitations" for a dense grid
    layout.
-6. **A subsetting/redefinition arrow between two usages**, distinct from the
+7. **A subsetting/redefinition arrow between two usages**, distinct from the
    definition-level specialization arrow already drawn — the spec shows this
    as a separate dashed relationship line.
-7. **Requirement body constructs** — `require constraint`/`assume
+8. **Requirement body constructs** — `require constraint`/`assume
    constraint`/`objective`/`stakeholder`, and inline requirement text shown
    in the box itself rather than only as a hover tooltip (would need real
-   text wrapping — see item 9).
-8. **Hollow diamond for a reference (non-owning) containment**, contrasted
+   text wrapping — see item 10).
+9. **Hollow diamond for a reference (non-owning) containment**, contrasted
    with the filled diamond already drawn for composition.
-9. **Real text measurement** — the renderer currently estimates box width
-   from character counts; swapping in `getBBox()`-based measurement (as
-   mermaid's own class diagram does) would tighten box sizing and enable
-   wrapping long requirement text (see item 7) and fixing the guard-label
-   crowding noted in "Known limitations."
-10. Publishing to npm and registering in Mermaid's
-   [community integrations list](https://mermaid.js.org/ecosystem/integrations-community.html),
-   and linking this project from the GitHub issue, once it's further along.
+10. **Real text measurement** — the renderer currently estimates box width
+    from character counts; swapping in `getBBox()`-based measurement (as
+    mermaid's own class diagram does) would tighten box sizing and enable
+    wrapping long requirement text (see item 8) and fixing the guard-label
+    crowding noted in "Known limitations."
+11. Publishing to npm and registering in Mermaid's
+    [community integrations list](https://mermaid.js.org/ecosystem/integrations-community.html),
+    and linking this project from the GitHub issue, once it's further along.
 
 ## License
 

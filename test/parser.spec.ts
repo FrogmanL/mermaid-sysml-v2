@@ -1102,4 +1102,75 @@ action def TakePicture;
 action takePicture : TakePicture;`);
     expect(model.definitions.map((d) => d.name)).toEqual(['TakePicture']);
   });
+
+  // send/accept grammar below is grounded against the OMG's own training
+  // corpus: Systems-Modeling/SysML-v2-Release/sysml/src/training/
+  // "21. Asynchronous Messaging".
+
+  it('parses the real Messaging Example end to end: accept shorthand, succession, and send', () => {
+    const model = parseSysml(`sysml-v2
+action def Focus { in item scene : Scene; out item image : Image; }
+action def Shoot { in item image : Image; out item picture : Picture; }
+action def TakePicture;
+
+action screen;
+
+action takePicture : TakePicture {
+  action trigger accept scene : Scene;
+
+  then action focus : Focus {
+    in item scene = trigger.scene;
+    out item image;
+  }
+
+  flow from focus.image to shoot.image;
+
+  then action shoot : Shoot {
+    in item image;
+    out item picture;
+  }
+
+  then send new Show(shoot.picture) to screen;
+}`);
+    const def = model.definitions.find((d) => d.name === 'takePicture');
+    if (def?.kind !== 'actionDef') throw new Error('expected actionDef');
+    const trigger = def.actions.find((a) => a.name === 'trigger');
+    expect(trigger?.accept).toEqual({ param: 'scene', type: 'Scene', via: undefined });
+    expect(def.sends).toEqual([
+      { id: '__send1__', payload: 'new Show ( shoot.picture )', to: 'screen', via: undefined },
+    ]);
+    expect(def.successions).toEqual([
+      { from: 'trigger', to: 'focus' },
+      { from: 'focus', to: 'shoot' },
+      { from: 'shoot', to: '__send1__' },
+    ]);
+  });
+
+  it('parses accept/send with the `via <port>` form (Messaging with Ports)', () => {
+    const model = parseSysml(`sysml-v2
+action def Focus { in item scene : Scene; out item image : Image; }
+action def TakePicture;
+
+part camera {
+  port viewPort;
+  port displayPort;
+
+  action takePicture : TakePicture {
+    action trigger accept scene : Scene via viewPort;
+
+    then action focus : Focus {
+      in item scene = trigger.scene;
+      out item image;
+    }
+
+    then send new Show(focus.image) via displayPort;
+  }
+}`);
+    // `takePicture` is nested inside the part `camera`'s body — a part
+    // usage's inline body is skipped structurally (see "Known
+    // limitations"), so this just confirms the file parses without
+    // throwing; the action's own send/accept content isn't reachable from
+    // outside the part in this subset.
+    expect(model.definitions.map((d) => d.name)).toEqual(['Focus', 'TakePicture', 'camera']);
+  });
 });

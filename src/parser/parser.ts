@@ -1132,10 +1132,28 @@ function parseActionParam(p: ParserState): ActionParamNode {
  * A nested `action name [: Type] { ... }` usage — parsed only one level
  * deep (see `ActionUsageNode`'s doc comment): its own body (further nested
  * actions, param overrides, flows) is skipped structurally, not modeled.
+ * Also handles the `action name accept param [: Type] [via port];`
+ * shorthand (an accept-event action) in place of the ordinary type/body.
  */
 function parseActionUsage(p: ParserState): ActionUsageNode {
   p.expect('action');
   const name = p.advance().value;
+  if (p.at('accept')) {
+    p.advance();
+    const param = p.advance().value;
+    let type: string | undefined;
+    if (p.at(':>') || p.at(':')) {
+      p.advance();
+      type = parseQualifiedName(p);
+    }
+    let via: string | undefined;
+    if (p.at('via')) {
+      p.advance();
+      via = parseFeaturePath(p);
+    }
+    if (p.at(';')) p.advance();
+    return { name, accept: { param, type, via } };
+  }
   const { type } = parseOptionalTypeAndMultiplicity(p);
   if (p.at('{')) {
     skipBalancedBraceBlock(p);
@@ -1144,6 +1162,30 @@ function parseActionUsage(p: ParserState): ActionUsageNode {
     p.advance();
   }
   return { name, type };
+}
+
+/**
+ * `send <payload> [to <target>] [via <port>];` — always anonymous in the
+ * grammar, so it gets a synthesized id to participate in the succession
+ * graph like any other step (see `SendUsage`).
+ */
+function parseSendStatement(p: ParserState, def: ActionDefNode): string {
+  p.expect('send');
+  const payload = parseRawUntil(p, ['to', 'via', ';']);
+  let to: string | undefined;
+  let via: string | undefined;
+  if (p.at('to')) {
+    p.advance();
+    to = parseFeaturePath(p);
+  }
+  if (p.at('via')) {
+    p.advance();
+    via = parseFeaturePath(p);
+  }
+  if (p.at(';')) p.advance();
+  const id = `__send${def.sends.length + 1}__`;
+  def.sends.push({ id, payload: payload || undefined, to, via });
+  return id;
 }
 
 /** Guard-expression text after `if`, stopping at the first `then`, `{`, or `;` seen — never crosses into a nested block, unlike the generic `parseRawUntil`. */
@@ -1308,6 +1350,21 @@ function parseActionBody(p: ParserState, def: ActionDefNode): void {
       lastIsBranchPoint = false;
       continue;
     }
+    if (p.at('then') && p.peek(1).value === 'send') {
+      p.advance(); // 'then'
+      const id = parseSendStatement(p, def);
+      if (lastActionName) def.successions.push({ from: lastActionName, to: id });
+      lastActionName = id;
+      lastIsBranchPoint = false;
+      continue;
+    }
+    if (p.at('send')) {
+      const id = parseSendStatement(p, def);
+      if (lastActionName) def.successions.push({ from: lastActionName, to: id });
+      lastActionName = id;
+      lastIsBranchPoint = false;
+      continue;
+    }
     if (p.at('join')) {
       p.advance();
       const name = p.atIdent() ? p.advance().value : undefined;
@@ -1396,6 +1453,7 @@ function parseActionDef(p: ParserState): ActionDefNode {
     successions: [],
     flows: [],
     controlNodes: [],
+    sends: [],
   };
   if (p.at('{')) {
     parseActionBody(p, def);
@@ -1431,6 +1489,7 @@ function parseTopLevelActionUsage(p: ParserState): ActionDefNode | undefined {
     successions: [],
     flows: [],
     controlNodes: [],
+    sends: [],
   };
   parseActionBody(p, def);
   return def;
