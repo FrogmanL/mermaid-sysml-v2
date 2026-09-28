@@ -33,11 +33,12 @@ const ARROW_SIZE = 5;
 
 // Composition-tree layout constants (containment with no connectors).
 const TREE_CHILD_GAP = 24;
-const TREE_STEM_TOP = 14;
 const TREE_DIAMOND = 6;
 const TREE_STEM_MID = 12;
 const TREE_STEM_BOTTOM = 14;
-const TREE_LEVEL_GAP = TREE_STEM_TOP + TREE_DIAMOND * 2 + TREE_STEM_MID + TREE_STEM_BOTTOM;
+// The diamond's top vertex sits flush against the source box's border (per
+// spec convention), so the gap above it is just the diamond's own half-size.
+const TREE_LEVEL_GAP = TREE_DIAMOND * 2 + TREE_STEM_MID + TREE_STEM_BOTTOM;
 const MAX_TREE_DEPTH = 6;
 
 interface PreparedBox {
@@ -566,17 +567,11 @@ function drawTreeSubtree(node: G, layout: TreeSubtreeLayout, x: number, y: numbe
   if (!layout.children.length) return;
 
   const diamondCx = boxX + layout.boxWidth / 2;
-  const diamondCy = y + layout.boxHeight + TREE_STEM_TOP;
+  // Top vertex touches the box's bottom border directly, per spec convention.
+  const diamondCy = y + layout.boxHeight + TREE_DIAMOND;
   const barY = diamondCy + TREE_DIAMOND + TREE_STEM_MID;
   const childY = barY + TREE_STEM_BOTTOM;
 
-  node
-    .append('line')
-    .attr('class', 'tree-line')
-    .attr('x1', diamondCx)
-    .attr('y1', y + layout.boxHeight)
-    .attr('x2', diamondCx)
-    .attr('y2', diamondCy);
   drawTreeDiamond(node, diamondCx, diamondCy);
 
   let cx = x;
@@ -649,17 +644,11 @@ function prepareTreeBox(
       if (!children.length) return;
 
       const diamondCx = parentX + parentWidth / 2;
-      const diamondCy = parentHeight + TREE_STEM_TOP;
+      // Top vertex touches the box's bottom border directly, per spec convention.
+      const diamondCy = parentHeight + TREE_DIAMOND;
       const barY = diamondCy + TREE_DIAMOND + TREE_STEM_MID;
       const childY = barY + TREE_STEM_BOTTOM;
 
-      node
-        .append('line')
-        .attr('class', 'tree-line')
-        .attr('x1', diamondCx)
-        .attr('y1', parentHeight)
-        .attr('x2', diamondCx)
-        .attr('y2', diamondCy);
       drawTreeDiamond(node, diamondCx, diamondCy);
 
       let cx = (width - childrenTotalWidth) / 2;
