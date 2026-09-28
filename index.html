@@ -37,8 +37,18 @@
     <p>
       Example:
       <select id="example">
-        <option value="vehicle.mmd">vehicle.mmd (part/port/interface defs)</option>
-        <option value="bvm.mmd">bvm.mmd (containment + connectors)</option>
+        <optgroup label="Real-world examples">
+          <option value="vehicle.mmd">vehicle.mmd (part/port/interface defs)</option>
+          <option value="bvm.mmd">bvm.mmd (containment + connectors)</option>
+        </optgroup>
+        <optgroup label="Feature showcase">
+          <option value="features/01-part-port-interface-defs.mmd">01: part/port/interface defs</option>
+          <option value="features/02-definition-vs-usage.mmd">02: definition vs. usage (corners/stereotype)</option>
+          <option value="features/03-composition-tree.mmd">03: composition tree (recursive)</option>
+          <option value="features/04-ibd-connectors.mmd">04: IBD connectors (arrows/labels/dedup)</option>
+          <option value="features/05-nested-packages.mmd">05: nested packages</option>
+          <option value="features/06-resilience.mmd">06: skips unsupported constructs</option>
+        </optgroup>
       </select>
     </p>
     <div class="cols">

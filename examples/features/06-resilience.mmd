@@ -1,0 +1,33 @@
+sysml-v2
+// Feature: unsupported SysML v2 constructs (attribute def, requirement def
+// with a nested doc/subject, state def, view) are skipped structurally,
+// brace-aware, without disturbing the real Sensor/ReadingPort content around
+// them — including two constructs in a row, which used to trigger a real
+// bug (see git history: skipUnknownMember not stopping after its own brace).
+package Resilience {
+  attribute def IgnoredValueType {
+    attribute id : String;
+  }
+
+  part def Sensor {
+    port reading : ReadingPort;
+  }
+
+  requirement def SomeIgnoredRequirement {
+    doc /* this whole requirement def, including its own doc, is skipped */
+    subject sensor : Sensor;
+  }
+
+  port def ReadingPort {
+    out item value : Real;
+  }
+
+  state def IgnoredStateMachine {
+    state idle;
+    state active;
+  }
+
+  view ignoredView : StandardViewDefinitions::GeneralView {
+    expose Sensor;
+  }
+}
