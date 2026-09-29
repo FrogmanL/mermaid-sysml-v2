@@ -32,8 +32,9 @@ I can't launch a VS Code GUI from here to verify this myself — the build
 actual "does it render in a real preview" step needs a human to press F5.
 
 ```bash
-npm install        # from the monorepo root — installs the whole workspace
-npm run build -w mermaid-sysml-v2   # must happen first; see "Build order" below
+npm install        # from the monorepo root — installs the whole workspace,
+                    # and its root "prepare" script builds mermaid-sysml-v2
+                    # automatically (see "Build order" below)
 npm run build -w vscode-sysml-v2
 npm test -w vscode-sysml-v2
 npm run typecheck -w vscode-sysml-v2
@@ -89,11 +90,13 @@ this entirely instead of fighting over one fence language.
   polish VS Code's own Mermaid extension has. This round is just "does the
   diagram show up at all."
 - **Build order**: `vscode-sysml-v2` bundles `mermaid-sysml-v2`'s *built*
-  `dist/` output (a workspace dependency, not source), so
-  `mermaid-sysml-v2` must be built first. `npm run build --workspaces` at
-  the monorepo root happens to do this in the right order today (alphabetical
-  iteration), but nothing enforces it — if that ever breaks, build
-  `mermaid-sysml-v2` explicitly first.
+  `dist/` output (a workspace dependency, not source), so `mermaid-sysml-v2`
+  must be built first. This is enforced, not just incidental: the monorepo
+  root's `package.json` has a `prepare` script (`npm run build -w
+  mermaid-sysml-v2`) that npm runs automatically after every `npm install`/
+  `npm ci` at the root — found the hard way, when CI's own "Type-check" step
+  failed on a clean checkout with "Cannot find module 'mermaid-sysml-v2'"
+  because typecheck ran before anything had been built yet.
 - **Only the client-side render step is unit-tested** (`test/markdownIt.spec.ts`
   covers the markdown-it hook). The preview script's actual DOM-swapping
   behavior, and the extension end to end, can only really be verified by
