@@ -650,6 +650,46 @@ part def Vehicle {
     expect(controlUnit.parts.find((p) => p.name === 'inventory')?.type).toBe('Product');
   });
 
+  it('parses a bare item def, same shape as attribute def (Messaging Example)', () => {
+    const model = parseSysml(`sysml-v2
+item def Scene;
+item def Image;
+item def Picture;`);
+    expect(model.definitions.map((d) => d.name)).toEqual(['Scene', 'Image', 'Picture']);
+    for (const def of model.definitions) {
+      expect(def.kind).toBe('itemDef');
+    }
+  });
+
+  it('parses an item def with attribute members and specialization (:>)', () => {
+    const model = parseSysml(`sysml-v2
+item def Base;
+item def Derived :> Base {
+  attribute id : String;
+}`);
+    const derived = model.definitions.find((d) => d.name === 'Derived');
+    if (derived?.kind !== 'itemDef') throw new Error('expected itemDef');
+    expect(derived.superType).toBe('Base');
+    expect(derived.attributes).toEqual([{ name: 'id', type: 'String', value: undefined }]);
+  });
+
+  // Regression: `attribute def`'s (and `item def`'s) body loop only
+  // recognized `attribute` members, not a bare `item name : Type;` member —
+  // confirmed a real gap against the OMG's own Messaging Example.sysml,
+  // where `attribute def Show { item picture : Picture; }` silently lost
+  // `picture` entirely (fell to the generic skip). Both keywords now
+  // produce the same `AttributeNode` shape, shown in the same compartment.
+  it('parses a bare `item name : Type;` member inside an attribute def, same as attribute', () => {
+    const model = parseSysml(`sysml-v2
+item def Picture;
+attribute def Show {
+  item picture : Picture;
+}`);
+    const show = model.definitions.find((d) => d.name === 'Show');
+    if (show?.kind !== 'attributeDef') throw new Error('expected attributeDef');
+    expect(show.attributes).toEqual([{ name: 'picture', type: 'Picture', value: undefined }]);
+  });
+
   // Use case def/usage grammar below is grounded against the OMG's own
   // training corpus: Systems-Modeling/SysML-v2-Release/sysml/src/training/
   // "35. Use Cases"/{Use Case Definition Example, Use Case Usage Example}.sysml.

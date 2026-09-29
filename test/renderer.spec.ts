@@ -419,6 +419,16 @@ attribute def Product {
     expect(lines).toEqual(expect.arrayContaining(['id : String', 'price : Real']));
   });
 
+  it('renders an item def as a leaf box, same shape as attribute def', () => {
+    db.parse(`sysml-v2
+item def Scene;`);
+    select(document.body).append('svg').attr('id', 'sysml-test-24b');
+    draw('', 'sysml-test-24b', '0.0.0');
+
+    const node = findNodeByTitle(document.querySelector('#sysml-test-24b')!, 'Scene');
+    expect(node.querySelector(':scope > .stereotype')?.textContent).toBe('«item def»');
+  });
+
   it('renders an enum def as a leaf box with a values compartment', () => {
     db.parse(`sysml-v2
 enum def DispenseResult {
@@ -686,8 +696,16 @@ action def ChargeBattery {
     expect(node.querySelectorAll('line.succession-line').length).toBe(2);
   });
 
-  it('renders the real Messaging Example end to end: accept/send as pentagon nodes in the succession chain', () => {
+  it('renders the real Messaging Example end to end: accept/send as pentagon nodes, item defs now real boxes', () => {
     db.parse(`sysml-v2
+item def Scene;
+item def Image;
+item def Picture;
+
+attribute def Show {
+  item picture : Picture;
+}
+
 action def Focus { in item scene : Scene; out item image : Image; }
 action def Shoot { in item image : Image; out item picture : Picture; }
 action def TakePicture;
@@ -714,7 +732,21 @@ action takePicture : TakePicture {
     select(document.body).append('svg').attr('id', 'sysml-test-39');
     expect(() => draw('', 'sysml-test-39', '0.0.0')).not.toThrow();
 
-    const node = findNodeByTitle(document.querySelector('#sysml-test-39')!, 'takePicture : TakePicture');
+    const svgEl = document.querySelector('#sysml-test-39')!;
+    // The three item defs each get their own box now (a real, evidenced gap
+    // closed here — this exact file used to skip them entirely).
+    for (const name of ['Scene', 'Image', 'Picture']) {
+      const itemNode = findNodeByTitle(svgEl, name);
+      expect(itemNode.querySelector(':scope > .stereotype')?.textContent).toBe('«item def»');
+    }
+    // `Show`'s own `item picture : Picture;` member (not `attribute`) is
+    // also now captured, not silently dropped.
+    const showNode = findNodeByTitle(svgEl, 'Show');
+    expect(Array.from(showNode.querySelectorAll('.member')).map((el) => el.textContent)).toContain(
+      'picture : Picture'
+    );
+
+    const node = findNodeByTitle(svgEl, 'takePicture : TakePicture');
     // One concave pentagon (accept) and one convex pentagon (send) — both
     // use the same `action-message` class, distinguished only by their
     // polygon points (notch left vs. tip right).

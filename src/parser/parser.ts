@@ -12,6 +12,7 @@ import type {
   EnumDefNode,
   InterfaceDefNode,
   InterfaceEndNode,
+  ItemDefNode,
   PartDefNode,
   PartUsageNode,
   PortDefNode,
@@ -279,8 +280,9 @@ function parseImport(p: ParserState): void {
   if (p.at(';')) p.advance();
 }
 
-function parseAttribute(p: ParserState): AttributeNode {
-  p.expect('attribute');
+/** `<keyword> name [: Type] [= value];` — shared shape for `attribute name ...;` and `item name ...;` (an item-typed feature reads identically, e.g. `attribute def Show { item picture : Picture; }`). */
+function parseAttributeLike(p: ParserState, keyword: string): AttributeNode {
+  p.expect(keyword);
   const name = p.advance().value;
   let type: string | undefined;
   let typeKind: TypeRelation | undefined;
@@ -296,6 +298,15 @@ function parseAttribute(p: ParserState): AttributeNode {
   }
   if (p.at(';')) p.advance();
   return { name, type, typeKind, value };
+}
+
+function parseAttribute(p: ParserState): AttributeNode {
+  return parseAttributeLike(p, 'attribute');
+}
+
+/** `item name [: Type] [= value];` as a nested member (not `item def`) — see `parseAttributeLike`. */
+function parseItemMember(p: ParserState): AttributeNode {
+  return parseAttributeLike(p, 'item');
 }
 
 function parsePortRef(p: ParserState): PortRefNode {
@@ -728,6 +739,50 @@ function parseAttributeDef(p: ParserState): AttributeDefNode {
       if (p.eof()) break;
       if (p.at('attribute') && p.peek(1).value !== 'def') {
         def.attributes.push(parseAttribute(p));
+        continue;
+      }
+      if (p.at('item') && p.peek(1).value !== 'def') {
+        def.attributes.push(parseItemMember(p));
+        continue;
+      }
+      skipUnknownMember(p);
+    }
+  } else if (p.at(';')) {
+    p.advance();
+  }
+  return def;
+}
+
+/**
+ * `item def Name [:> Super] { attribute field ...; }` — same shape as
+ * `attribute def` (see `ItemDefNode`'s doc comment for corpus evidence).
+ */
+function parseItemDef(p: ParserState): ItemDefNode {
+  p.expect('item');
+  p.expect('def');
+  const name = p.advance().value;
+  let superType: string | undefined;
+  if (p.at(':>') || p.at(':')) {
+    p.advance();
+    superType = parseQualifiedName(p);
+  }
+  const def: ItemDefNode = { kind: 'itemDef', name, superType, attributes: [] };
+  if (p.at('{')) {
+    p.advance();
+    for (;;) {
+      const doc = skipDocAndComments(p);
+      if (doc && !def.doc) def.doc = doc;
+      if (p.at('}')) {
+        p.advance();
+        break;
+      }
+      if (p.eof()) break;
+      if (p.at('attribute') && p.peek(1).value !== 'def') {
+        def.attributes.push(parseAttribute(p));
+        continue;
+      }
+      if (p.at('item') && p.peek(1).value !== 'def') {
+        def.attributes.push(parseItemMember(p));
         continue;
       }
       skipUnknownMember(p);
@@ -1542,6 +1597,10 @@ function parseMembers(
     }
     if (p.at('attribute') && p.peek(1).value === 'def') {
       definitions.push(parseAttributeDef(p));
+      continue;
+    }
+    if (p.at('item') && p.peek(1).value === 'def') {
+      definitions.push(parseItemDef(p));
       continue;
     }
     if (p.at('enum') && p.peek(1).value === 'def') {

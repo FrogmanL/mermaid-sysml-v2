@@ -145,6 +145,22 @@ export interface AttributeDefNode {
 }
 
 /**
+ * `item def Name [:> Super] { attribute field ...; }` — a standalone item
+ * (payload/flow-value) type, same shape as `attribute def`. A real,
+ * evidenced gap closed here: the OMG's own `"21. Asynchronous Messaging"`
+ * training examples that drove `send`/`accept` (see `ActionUsageNode`,
+ * `SendUsage`) declare `item def Scene;`-style items as message payload
+ * types — those parsed past with no box until now.
+ */
+export interface ItemDefNode {
+  kind: 'itemDef';
+  name: string;
+  superType?: string;
+  doc?: string;
+  attributes: AttributeNode[];
+}
+
+/**
  * `enum def Name [:> Super] { enum literal; ... }` — an enumeration.
  * Confirmed against `examples/bvm.mmd`'s own
  * `enum def DispenseResult { enum success; enum failure; }`, referenced by
@@ -393,6 +409,7 @@ export type DefinitionNode =
   | ConnectionDefNode
   | RequirementDefNode
   | AttributeDefNode
+  | ItemDefNode
   | EnumDefNode
   | UseCaseDefNode
   | ActionDefNode;

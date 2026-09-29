@@ -7,16 +7,15 @@ sysml-v2
 //
 // Grounded against the OMG's own training corpus: Systems-Modeling/
 // SysML-v2-Release/sysml/src/training/"21. Asynchronous Messaging"/
-// Messaging Example.sysml, almost verbatim (including its own `item def`
-// declarations below, which this subset doesn't render — `item def` isn't
-// implemented, so Scene/Image/Picture/Show parse and are skipped
-// structurally rather than drawn; see README "Known limitations"). This is
-// also the first real building block of a genuine sequence/interaction
-// view — `screen` is the message's addressee, but this round doesn't draw
-// a cross-box arrow to it (only the "to screen" text on the send node)
-// since `screen` sits outside `takePicture`'s own flowchart namespace; see
-// README "Extending this" for what a real Sequence View would need on top
-// of this.
+// Messaging Example.sysml, verbatim, including its own `item def`
+// declarations below — Scene/Image/Picture each get their own box (see
+// examples/features/10-attribute-and-enum-defs.mmd for `item def`'s sibling
+// `attribute def`/`enum def`). This is also the first real building block
+// of a genuine sequence/interaction view — `screen` is the message's
+// addressee, but this round doesn't draw a cross-box arrow to it (only the
+// "to screen" text on the send node) since `screen` sits outside
+// `takePicture`'s own flowchart namespace; see README "Extending this" for
+// what a real Sequence View would need on top of this.
 package SendAccept {
   action def Focus { in item scene : Scene; out item image : Image; }
   action def Shoot { in item image : Image; out item picture : Picture; }

@@ -257,6 +257,18 @@ function toLeafBox(def: DefinitionNode): LeafBox {
     }
     return { stereotype: 'attribute def', name: def.name, rounded: false, doc: def.doc, compartments };
   }
+  if (def.kind === 'itemDef') {
+    const compartments: RenderCompartment[] = [];
+    if (def.attributes.length) {
+      compartments.push({
+        label: 'attributes',
+        lines: def.attributes.map((a) =>
+          a.value !== undefined ? `${a.name} = ${a.value}` : `${a.name}${typeSuffix(a.type, a.typeKind)}`
+        ),
+      });
+    }
+    return { stereotype: 'item def', name: def.name, rounded: false, doc: def.doc, compartments };
+  }
   if (def.kind === 'enumDef') {
     const compartments: RenderCompartment[] = [];
     if (def.values.length) {
