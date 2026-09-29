@@ -31,13 +31,16 @@ const previewConfig = {
   minify,
 };
 
+/** The standalone `.sysml` preview panel's webview bundle — same story as above: a browser context that bundles mermaid + the plugin. */
+const webviewConfig = { ...previewConfig, entryPoints: ['preview-src/webview.ts'], outfile: 'dist/webview/index.js' };
+
 async function run() {
   if (watch) {
-    const contexts = await Promise.all([context(extensionConfig), context(previewConfig)]);
+    const contexts = await Promise.all([context(extensionConfig), context(previewConfig), context(webviewConfig)]);
     await Promise.all(contexts.map((c) => c.watch()));
-    console.log('esbuild watching (extension + preview)...');
+    console.log('esbuild watching (extension + preview + webview)...');
   } else {
-    await Promise.all([build(extensionConfig), build(previewConfig)]);
+    await Promise.all([build(extensionConfig), build(previewConfig), build(webviewConfig)]);
   }
 }
 

@@ -1,7 +1,7 @@
 {
   "name": "vscode-sysml-v2",
   "displayName": "SysML v2 Preview",
-  "description": "Renders sysml-v2 fenced code blocks (via mermaid-sysml-v2) inside VS Code's built-in Markdown preview.",
+  "description": "Renders SysML v2 diagrams (via mermaid-sysml-v2): sysml-v2 fenced blocks in VS Code's Markdown preview, and a live preview panel for .sysml files.",
   "version": "0.1.0",
   "publisher": "unpublished",
   "private": true,
@@ -30,7 +30,36 @@
     "markdown.markdownItPlugins": true,
     "markdown.previewScripts": [
       "./dist/preview/index.js"
-    ]
+    ],
+    "commands": [
+      {
+        "command": "sysml-v2.openPreview",
+        "title": "SysML v2: Open Preview",
+        "icon": "$(open-preview)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "sysml-v2.openPreview",
+          "when": "resourceExtname == .sysml",
+          "group": "navigation"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "sysml-v2.openPreview",
+          "when": "resourceExtname == .sysml",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "sysml-v2.openPreview",
+          "when": "editorLangId == sysml || resourceExtname == .sysml"
+        }
+      ]
+    }
   },
   "scripts": {
     "build": "node esbuild.mjs",

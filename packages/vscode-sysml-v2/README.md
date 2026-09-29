@@ -40,6 +40,17 @@ npm test -w vscode-sysml-v2
 npm run typecheck -w vscode-sysml-v2
 ```
 
+## `.sysml` files
+
+Open any `.sysml` file and click the preview button in the editor title bar
+(or run **SysML v2: Open Preview** from the command palette, or right-click
+the file in the Explorer). A panel opens beside the editor and re-renders as
+you type. This is a separate code path from the Markdown preview: a webview
+panel (`src/sysmlPreview.ts`) loading its own bundle
+(`preview-src/webview.ts`), sharing the render code in
+`preview-src/render.ts`. The panel draws on a white canvas because Mermaid's
+default theme isn't dark-mode aware (see "Known limitations").
+
 ## How it works
 
 Grounded directly against VS Code's own built-in Mermaid support (as of VS
