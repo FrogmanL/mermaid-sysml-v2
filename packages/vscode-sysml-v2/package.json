@@ -1,0 +1,50 @@
+{
+  "name": "vscode-sysml-v2",
+  "displayName": "SysML v2 Preview",
+  "description": "Renders sysml-v2 fenced code blocks (via mermaid-sysml-v2) inside VS Code's built-in Markdown preview.",
+  "version": "0.1.0",
+  "publisher": "unpublished",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "sysml",
+    "sysml-v2",
+    "mermaid",
+    "markdown",
+    "mbse"
+  ],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "markdown.markdownItPlugins": true,
+    "markdown.previewScripts": [
+      "./dist/preview/index.js"
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "vscode:prepublish": "npm run build"
+  },
+  "dependencies": {
+    "mermaid": "^11.4.1",
+    "mermaid-sysml-v2": "*"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "^14.1.0",
+    "@types/node": "^22.9.0",
+    "@types/vscode": "^1.90.0",
+    "esbuild": "^0.21.5",
+    "markdown-it": "^14.1.0",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4"
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "name": "mermaid-sysml-v2",
+  "version": "0.1.0",
+  "description": "External Mermaid diagram plugin adding a SysML v2 textual-notation subset (part def / port def / interface def) as a first-class Mermaid diagram type, via mermaid.registerExternalDiagrams.",
+  "type": "module",
+  "module": "dist/mermaid-sysml-v2.core.mjs",
+  "types": "dist/detector.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/detector.d.ts",
+      "import": "./dist/mermaid-sysml-v2.core.mjs"
+    },
+    "./*": "./*"
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "keywords": [
+    "mermaid",
+    "mermaid-plugin",
+    "sysml",
+    "sysml-v2",
+    "diagram",
+    "mbse"
+  ],
+  "license": "MIT",
+  "scripts": {
+    "build": "vite build && tsc -p tsconfig.build.json",
+    "dev": "vite",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "mermaid": "^10 || ^11"
+  },
+  "dependencies": {
+    "d3": "^7.9.0"
+  },
+  "devDependencies": {
+    "@types/d3": "^7.4.3",
+    "@types/node": "^22.9.0",
+    "jsdom": "^25.0.1",
+    "mermaid": "^11.4.1",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10",
+    "vitest": "^2.1.4"
+  }
+}
