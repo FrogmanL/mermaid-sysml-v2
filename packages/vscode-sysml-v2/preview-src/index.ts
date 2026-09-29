@@ -29,8 +29,10 @@ let renderCounter = 0;
  */
 async function renderAll(): Promise<void> {
   await ensureReady();
-  const containers = document.body.querySelectorAll<HTMLElement>(`.${sysmlV2DiagramClassName}`);
+  const containers = document.body.querySelectorAll<HTMLElement>(`.${sysmlV2DiagramClassName}:not([data-sysml-v2-rendered])`);
   for (const container of Array.from(containers)) {
+    // Mark before the first await so an overlapping renderAll() (load + updateContent) can't pick it up too.
+    container.dataset.sysmlV2Rendered = 'true';
     const source = (container.textContent ?? '').trim();
     if (!source) continue;
     const id = `sysml-v2-preview-${renderCounter++}`;

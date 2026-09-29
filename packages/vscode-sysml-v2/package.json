@@ -6,6 +6,11 @@
   "publisher": "unpublished",
   "private": true,
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/FrogmanL/mermaid-sysml-v2.git",
+    "directory": "packages/vscode-sysml-v2"
+  },
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -31,6 +36,7 @@
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc --noEmit",
+    "package": "vsce package --no-dependencies",
     "test": "vitest run",
     "vscode:prepublish": "npm run build"
   },
@@ -42,6 +48,7 @@
     "@types/markdown-it": "^14.1.0",
     "@types/node": "^22.9.0",
     "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.2.0",
     "esbuild": "^0.21.5",
     "markdown-it": "^14.1.0",
     "typescript": "^5.6.3",

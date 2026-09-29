@@ -5,6 +5,6 @@ test/**
 examples/**
 esbuild.mjs
 tsconfig.json
-*.map
+**/*.map
 .gitignore
 **/*.ts
