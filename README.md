@@ -257,15 +257,28 @@ covers:
     limitations."
   - **Deliberately out of scope**: `bind` (data binding — parsed and
     discarded, not drawn) and expanding a `loop`'s own body.
+- **`perform`/`references`** — a part instance performing a (possibly
+  shared) action or one of its sub-actions, confirmed against the OMG's own
+  `training/"18. Action Performance"/Action Performance Example.sysml`:
+  `perform action takePhoto[*] ordered references takePicture;` declares a
+  new performed-action usage; a sibling part's bare `perform
+  takePhoto.focus;` instead performs a specific sub-action of an
+  already-declared one. **Parsed but not yet rendered** — this is groundwork
+  for a future multi-lifeline Sequence View (each performing part would
+  become a lifeline, ordered by the referenced action's own succession
+  chain), not a diagram element on its own yet. Like every other nested-body
+  construct here, a `perform` nested one level inside another part's inline
+  body is skipped along with the rest of that body (see "Known limitations");
+  only a `perform` in a top-level part's own body is captured today.
 - `doc /* ... */` comments (shown as a hover tooltip on the box).
 - `import` statements and quoted (`'...'`) identifiers (parsed/tokenized
   correctly, then ignored).
 
 Everything else — `bind`, a `loop`'s own body, `send`/`accept`'s own
-cross-box delivery arrow, `perform`/`references` (a part instance performing
-a shared sub-action — the likely real backing for a proper multi-lifeline
-Sequence View, not yet parsed), sequence diagrams as their own dedicated
-view, state machines, views, `copy`, variability modeling (`variation`/
+cross-box delivery arrow, actually rendering `perform`/`references` as a
+multi-lifeline Sequence View (parsed already — see "Scope" above — just not
+drawn yet), sequence diagrams as their own dedicated view, state machines,
+views, `copy`, variability modeling (`variation`/
 `variant`), port redefinition, expressions beyond a raw right-hand side —
 is outside this subset. The parser skips unrecognized constructs resiliently
 (structurally, brace-aware) rather than failing the whole diagram, so a real
@@ -328,10 +341,11 @@ during development, not vendored into this repo except where noted) from:
   Scene;`-style items) and the `item`-introduced member form (`attribute def
   Show { item picture : Picture; }`) were found and closed — both parse and
   render now, not just the message vocabulary itself. `"18. Action
-  Performance"` (introduces `perform`/`references` — a part instance
-  performing a shared sub-action, the likely real backing for a proper
-  multi-lifeline Sequence View) and `"22. Opaque Actions"` weren't
-  incorporated yet; see "Extending this."
+  Performance"/Action Performance Example.sysml` drove `perform`/
+  `references` (a part instance performing a shared sub-action, the likely
+  real backing for a proper multi-lifeline Sequence View) — now parsed and
+  structurally captured, though not yet rendered as anything on its own; see
+  "Extending this." `"22. Opaque Actions"` wasn't incorporated yet.
 - **[GfSE/SysML-v2-Models](https://github.com/GfSE/SysML-v2-Models)** — a
   community-curated collection (Gesellschaft für Systems Engineering),
   ranging from simple (`example_family/family.sysml`) to genuinely advanced.
@@ -538,12 +552,17 @@ Natural next steps, roughly in order of value:
    between them over a shared time axis, which is a different rendering
    paradigm again (like the jump from compartmented boxes to the action
    flowchart was). The likely missing piece to properly attribute which
-   participant does what: `perform`/`references` (grounded from the OMG's
+   participant does what, `perform`/`references` (grounded from the OMG's
    own `training/"18. Action Performance"/Action Performance Example.sysml`
    — a part instance "performing" a named sub-action of a shared behavior,
-   e.g. `part f : AutoFocus { perform takePhoto.focus; }`), not yet parsed
-   at all. This would also be what finally resolves a `send`'s `to`/`via`
-   cross-box delivery target (see "Known limitations").
+   e.g. `part f : AutoFocus { perform takePhoto.focus; }`), is now parsed and
+   structurally captured (see "Scope" above) — but still not rendered as
+   anything, and still only captured one level deep (a `perform` nested
+   inside another part's inline body is skipped, same as any other nested
+   body here). The actual lifeline layout/rendering, and extending capture to
+   nested parts, are both still open. This would also be what finally
+   resolves a `send`'s `to`/`via` cross-box delivery target (see "Known
+   limitations").
 2. **Order/sequencing between a use case's steps** — each `include`/nested
    `use case` step now draws its own relationship (see "Scope" above), but
    not the `first`/`then`/`done` order they actually run in. Reusing the

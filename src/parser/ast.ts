@@ -58,6 +58,28 @@ export interface ConnectorNode {
   ends: string[];
 }
 
+/**
+ * `perform [action <name> [multiplicity] [ordered]] [references] <path>;` —
+ * a part instance performing a (possibly shared) action or one of its
+ * sub-actions. Confirmed against the OMG's own training corpus's
+ * `"18. Action Performance"/Action Performance Example.sysml`:
+ * `perform action takePhoto[*] ordered references takePicture;` declares a
+ * new performed-action usage (`name: 'takePhoto'`, `target: 'takePicture'`,
+ * `ordered: true`); a sibling part's `perform takePhoto.focus;` (no `action`/
+ * `references` keyword) instead directly performs a specific sub-action of
+ * an already-declared one (`name` absent, `target: 'takePhoto.focus'`).
+ *
+ * Kept structurally but **not yet rendered** — this is groundwork for a
+ * future multi-lifeline Sequence View (each performing part would become a
+ * lifeline, ordered by the referenced action's own succession chain), not
+ * a diagram element on its own yet. See README "Extending this."
+ */
+export interface PerformNode {
+  name?: string;
+  target: string;
+  ordered?: boolean;
+}
+
 export interface PartDefNode {
   kind: 'partDef';
   name: string;
@@ -78,6 +100,8 @@ export interface PartDefNode {
   ports: PortRefNode[];
   parts: PartUsageNode[];
   connectors: ConnectorNode[];
+  /** `perform ...;` statements found in this part's body — see `PerformNode`. */
+  performs: PerformNode[];
 }
 
 export interface PortFieldNode {

@@ -690,6 +690,65 @@ attribute def Show {
     expect(show.attributes).toEqual([{ name: 'picture', type: 'Picture', value: undefined }]);
   });
 
+  // `perform`/`references` grammar below is grounded against the OMG's own
+  // training corpus: Systems-Modeling/SysML-v2-Release/sysml/src/training/
+  // "18. Action Performance"/Action Performance Example.sysml. Parsed as
+  // groundwork for a future multi-lifeline Sequence View — not rendered yet.
+
+  it('parses `perform action <name> [mult] ordered references <path>;` as a new performed-action usage', () => {
+    const model = parseSysml(`sysml-v2
+part def Camera;
+part camera : Camera {
+  perform action takePhoto[*] ordered
+      references takePicture;
+}`);
+    const camera = model.definitions.find((d) => d.name === 'camera');
+    if (camera?.kind !== 'partDef') throw new Error('expected partDef');
+    expect(camera.performs).toEqual([{ name: 'takePhoto', target: 'takePicture', ordered: true }]);
+  });
+
+  it('parses a bare `perform <path>;` as directly performing a sub-action of an already-declared one', () => {
+    const model = parseSysml(`sysml-v2
+part def AutoFocus;
+part f : AutoFocus {
+  perform takePhoto.focus;
+}`);
+    const f = model.definitions.find((d) => d.name === 'f');
+    if (f?.kind !== 'partDef') throw new Error('expected partDef');
+    expect(f.performs).toEqual([{ name: undefined, target: 'takePhoto.focus', ordered: undefined }]);
+  });
+
+  // The real example nests `f`/`i` one level inside `camera`'s body. A nested
+  // part usage's own body sits outside this subset's containment depth (see
+  // the "one level deep" limitation noted throughout this file and the
+  // README), so their `perform` statements are skipped along with the rest
+  // of that inline body — only `camera`'s own top-level `performs` survive.
+  // This documents that existing, deliberate scope boundary rather than a
+  // new bug.
+  it('parses the full Action Performance Example: top-level performs captured, nested ones skipped (one level deep)', () => {
+    const model = parseSysml(`sysml-v2
+package 'Action Performance Example' {
+    private import 'Action Decomposition'::*;
+    part def Camera;
+    part def AutoFocus;
+    part def Imager;
+    part camera : Camera {
+        perform action takePhoto[*] ordered
+            references takePicture;
+        part f : AutoFocus {
+            perform takePhoto.focus;
+        }
+        part i : Imager {
+            perform takePhoto.shoot;
+        }
+    }
+}`);
+    const camera = model.definitions.find((d) => d.name === 'camera');
+    if (camera?.kind !== 'partDef') throw new Error('expected partDef');
+    expect(camera.performs).toEqual([{ name: 'takePhoto', target: 'takePicture', ordered: true }]);
+    expect(camera.parts.map((p) => p.name)).toEqual(['f', 'i']);
+  });
+
   // Use case def/usage grammar below is grounded against the OMG's own
   // training corpus: Systems-Modeling/SysML-v2-Release/sysml/src/training/
   // "35. Use Cases"/{Use Case Definition Example, Use Case Usage Example}.sysml.

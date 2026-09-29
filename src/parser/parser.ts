@@ -15,6 +15,7 @@ import type {
   ItemDefNode,
   PartDefNode,
   PartUsageNode,
+  PerformNode,
   PortDefNode,
   PortFieldNode,
   PortRefNode,
@@ -457,6 +458,31 @@ function parseConnectionUsage(p: ParserState, connectors: ConnectorNode[]): void
 }
 
 /** Shared member loop for both `part def Name { ... }` and a bare `part name { ... }` usage-with-body. */
+/**
+ * `perform [action <name> [multiplicity] [ordered]] [references] <path>;` —
+ * see `PerformNode` for the two grammar forms this handles, confirmed
+ * against the OMG training corpus's "18. Action Performance"/Action
+ * Performance Example.sysml.
+ */
+function parsePerform(p: ParserState): PerformNode {
+  p.expect('perform');
+  let name: string | undefined;
+  let ordered: boolean | undefined;
+  if (p.at('action')) {
+    p.advance();
+    name = p.advance().value;
+    parseOptionalMultiplicity(p);
+    if (p.at('ordered')) {
+      p.advance();
+      ordered = true;
+    }
+  }
+  if (p.at('references')) p.advance();
+  const target = parseFeaturePath(p);
+  if (p.at(';')) p.advance();
+  return { name, target, ordered };
+}
+
 function parsePartBody(p: ParserState, def: PartDefNode): void {
   p.expect('{');
   for (;;) {
@@ -488,6 +514,10 @@ function parsePartBody(p: ParserState, def: PartDefNode): void {
       parseConnectionUsage(p, def.connectors);
       continue;
     }
+    if (p.at('perform')) {
+      def.performs.push(parsePerform(p));
+      continue;
+    }
     // Nested defs (including `attribute def`/`enum def` — this subset only
     // recognizes those at the top/package level, matching every other def
     // kind here), actions, states, requirements, satisfy, etc. are outside
@@ -515,6 +545,7 @@ function parsePartDef(p: ParserState): PartDefNode {
     ports: [],
     parts: [],
     connectors: [],
+    performs: [],
   };
   if (p.at('{')) {
     parsePartBody(p, def);
@@ -552,6 +583,7 @@ function parseTopLevelPartUsage(p: ParserState): PartDefNode | undefined {
     ports: [],
     parts: [],
     connectors: [],
+    performs: [],
   };
   parsePartBody(p, def);
   return def;
