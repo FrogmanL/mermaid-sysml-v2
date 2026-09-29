@@ -102,6 +102,15 @@ export interface PartDefNode {
   connectors: ConnectorNode[];
   /** `perform ...;` statements found in this part's body — see `PerformNode`. */
   performs: PerformNode[];
+  /**
+   * `message ...;` statements found directly in this part's body — see
+   * `MessageNode`. Confirmed against the OMG's own `examples/Interaction
+   * Sequencing Examples/ServerSequenceModel.sysml`, where a `part def`
+   * containing both nested `part` usages and `message ... from ... to ...;`
+   * statements between them is itself the Sequence View's container (as
+   * opposed to a dedicated `occurrence def` — see `OccurrenceDefNode`).
+   */
+  messages: MessageNode[];
 }
 
 export interface PortFieldNode {
@@ -426,6 +435,52 @@ export interface ActionDefNode {
   hasDone?: boolean;
 }
 
+/**
+ * `message [name] [of ItemType] from <path> to <path>;` — a single message
+ * crossing between two participants. Confirmed against the OMG's own
+ * training corpus's `"27. Occurrences"/Interaction Example-1.sysml`
+ * (`message setSpeedMessage of SetSpeed from driver.setSpeedSent to
+ * vehicle.cruiseController.setSpeedReceived;`) and
+ * `examples/Interaction Sequencing Examples/ServerSequenceModel.sysml`
+ * (`message publish_message from producer.publish_source_event to
+ * server.publish_target_event;`), plus the OMG's own graphical-notation
+ * deck's "Sequence View" slide, which uses the same grammar with bare
+ * action names instead of dotted paths (`message of VehicleStart from
+ * turnVehicleOn to trigger1;`). `from`/`to` are kept as raw dotted paths —
+ * only their first segment is resolved to a lifeline (see the Sequence View
+ * section in renderer.ts and README "Known limitations").
+ */
+export interface MessageNode {
+  name?: string;
+  itemType?: string;
+  from: string;
+  to: string;
+}
+
+/**
+ * `occurrence def Name [:> Super] { ref part p [...]; message ...; first m1
+ * then m2 [then m3 ...]; }` — SysML v2's actual multi-participant
+ * interaction container, and this subset's real basis for a Sequence View
+ * (see README "Extending this"). `ref part` declarations name the
+ * participants — either a plain `ref part name;`, or the same-name
+ * redefinition shorthand with no local name at all (`ref part :>> driver;`,
+ * confirmed against the OMG's own `Interaction Example-1.sysml`: the
+ * participant's name IS the redefined feature's name, `driver`). Either
+ * way this is simple-name only — the same resolve-by-name limitation used
+ * everywhere else in this subset. `first a then b [then c ...];` orders
+ * messages by name; any message not mentioned in an order chain falls back
+ * to declaration order (see `orderMessages` in renderer.ts).
+ */
+export interface OccurrenceDefNode {
+  kind: 'occurrenceDef';
+  name: string;
+  superType?: string;
+  doc?: string;
+  participants: string[];
+  messages: MessageNode[];
+  order: string[][];
+}
+
 export type DefinitionNode =
   | PartDefNode
   | PortDefNode
@@ -436,7 +491,8 @@ export type DefinitionNode =
   | ItemDefNode
   | EnumDefNode
   | UseCaseDefNode
-  | ActionDefNode;
+  | ActionDefNode
+  | OccurrenceDefNode;
 
 export interface SysmlModel {
   packageName?: string;

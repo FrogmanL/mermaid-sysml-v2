@@ -696,6 +696,88 @@ action def ChargeBattery {
     expect(node.querySelectorAll('line.succession-line').length).toBe(2);
   });
 
+  // Sequence View: grounded against the OMG's own training corpus ("27.
+  // Occurrences"/Interaction Example-1.sysml) and its own `examples/
+  // Interaction Sequencing Examples/ServerSequenceModel.sysml`.
+  it('renders an occurrence def as a Sequence View: one lifeline per ref part, messages in first/then order', () => {
+    db.parse(`sysml-v2
+item def SetSpeed;
+item def SensedSpeed;
+item def FuelCommand;
+
+occurrence def CruiseControlInteraction {
+    ref part :>> driver;
+    ref part :>> vehicle;
+
+    message setSpeedMessage of SetSpeed
+        from driver.setSpeedSent to vehicle.cruiseController.setSpeedReceived;
+
+    message sensedSpeedMessage of SensedSpeed
+        from vehicle.speedometer.sensedSpeedSent to vehicle.cruiseController.sensedSpeedReceived;
+
+    first setSpeedMessage then sensedSpeedMessage;
+}`);
+    select(document.body).append('svg').attr('id', 'sysml-test-40');
+    expect(() => draw('', 'sysml-test-40', '0.0.0')).not.toThrow();
+
+    const svgEl = document.querySelector('#sysml-test-40')!;
+    const node = findNodeByTitle(svgEl, 'CruiseControlInteraction');
+    expect(node.querySelector(':scope > .stereotype')?.textContent).toBe('«occurrence def»');
+
+    // Two participants -> two lifeline header boxes (each its own `.child`,
+    // not a direct-child `.title`/`.stereotype` — see the render code) and
+    // two dashed lifelines.
+    const headers = Array.from(node.querySelectorAll(':scope > .child')).map(
+      (c) => c.querySelector('.title')?.textContent
+    );
+    expect(headers).toEqual(['driver', 'vehicle']);
+    expect(node.querySelectorAll('line.sequence-lifeline').length).toBe(2);
+
+    // Both messages draw, in `first`/`then` order. `setSpeedMessage` crosses
+    // driver -> vehicle (an ordinary arrow); `sensedSpeedMessage`'s own
+    // `vehicle.speedometer...` and `vehicle.cruiseController...` endpoints
+    // both resolve to the same first-segment lifeline (`vehicle`) — see
+    // "Known limitations" — so it draws as a self-message loop instead.
+    const labels = Array.from(node.querySelectorAll('text.sequence-message-label')).map((el) => el.textContent);
+    expect(labels).toEqual(['setSpeedMessage : SetSpeed', 'sensedSpeedMessage : SensedSpeed']);
+    expect(node.querySelectorAll('line.sequence-message-line').length).toBe(1);
+    expect(node.querySelectorAll('polyline.sequence-message-line').length).toBe(1);
+  });
+
+  it('renders `message` statements inside a part def as a Sequence View, with a self-message loop when both endpoints share a lifeline', () => {
+    db.parse(`sysml-v2
+part def PubSubSequence {
+    part producer[1] {
+        event occurrence publish_source_event;
+    }
+
+    message publish_message from producer.publish_source_event to server.publish_target_event;
+
+    part server[1] {
+        event occurrence subscribe_target_event;
+    }
+
+    message loopback from server.a to server.b;
+}`);
+    select(document.body).append('svg').attr('id', 'sysml-test-41');
+    expect(() => draw('', 'sysml-test-41', '0.0.0')).not.toThrow();
+
+    const svgEl = document.querySelector('#sysml-test-41')!;
+    const node = findNodeByTitle(svgEl, 'PubSubSequence');
+    expect(node.querySelector(':scope > .stereotype')?.textContent).toBe('«part def»');
+
+    const headers = Array.from(node.querySelectorAll(':scope > .child')).map(
+      (c) => c.querySelector('.title')?.textContent
+    );
+    expect(headers).toEqual(['producer', 'server']);
+
+    // The cross-lifeline message draws a straight arrow; the same-lifeline
+    // one (`server.a` to `server.b`, both resolving to the `server` root)
+    // draws the self-message loop instead — a `polyline`, not a `line`.
+    expect(node.querySelectorAll('line.sequence-message-line').length).toBe(1);
+    expect(node.querySelectorAll('polyline.sequence-message-line').length).toBe(1);
+  });
+
   it('renders the real Messaging Example end to end: accept/send as pentagon nodes, item defs now real boxes', () => {
     db.parse(`sysml-v2
 item def Scene;

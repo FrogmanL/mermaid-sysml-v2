@@ -749,6 +749,114 @@ package 'Action Performance Example' {
     expect(camera.parts.map((p) => p.name)).toEqual(['f', 'i']);
   });
 
+  // Sequence View grammar below is grounded against the OMG's own training
+  // corpus (`"27. Occurrences"/Interaction Example-1.sysml`) and its own
+  // `examples/Interaction Sequencing Examples/ServerSequenceModel.sysml` —
+  // SysML v2's actual multi-participant `message ... from ... to ...;`
+  // construct, the real basis for a Sequence View (see README).
+
+  it('parses an occurrence def with ref parts, messages, and a first/then order chain (Interaction Example-1)', () => {
+    const model = parseSysml(`sysml-v2
+item def SetSpeed;
+item def SensedSpeed;
+item def FuelCommand;
+
+occurrence def CruiseControlInteraction {
+    ref part :>> driver;
+    ref part :>> vehicle;
+
+    message setSpeedMessage of SetSpeed
+        from driver.setSpeedSent to vehicle.cruiseController.setSpeedReceived;
+
+    message sensedSpeedMessage of SensedSpeed
+        from vehicle.speedometer.sensedSpeedSent to vehicle.cruiseController.sensedSpeedReceived;
+
+    message fuelCommandMessage of FuelCommand
+        from vehicle.cruiseController.fuelCommandSent to vehicle.engine.fuelCommandReceived;
+
+    first setSpeedMessage then sensedSpeedMessage;
+}`);
+    const occ = model.definitions.find((d) => d.name === 'CruiseControlInteraction');
+    if (occ?.kind !== 'occurrenceDef') throw new Error('expected occurrenceDef');
+    expect(occ.participants).toEqual(['driver', 'vehicle']);
+    expect(occ.messages).toEqual([
+      {
+        name: 'setSpeedMessage',
+        itemType: 'SetSpeed',
+        from: 'driver.setSpeedSent',
+        to: 'vehicle.cruiseController.setSpeedReceived',
+      },
+      {
+        name: 'sensedSpeedMessage',
+        itemType: 'SensedSpeed',
+        from: 'vehicle.speedometer.sensedSpeedSent',
+        to: 'vehicle.cruiseController.sensedSpeedReceived',
+      },
+      {
+        name: 'fuelCommandMessage',
+        itemType: 'FuelCommand',
+        from: 'vehicle.cruiseController.fuelCommandSent',
+        to: 'vehicle.engine.fuelCommandReceived',
+      },
+    ]);
+    expect(occ.order).toEqual([['setSpeedMessage', 'sensedSpeedMessage']]);
+  });
+
+  it('parses `message ... from ... to ...;` directly inside a part def body, alongside nested parts (ServerSequenceModel)', () => {
+    const model = parseSysml(`sysml-v2
+part def PubSubSequence {
+    part producer[1] {
+        event occurrence publish_source_event;
+    }
+
+    message publish_message from producer.publish_source_event to server.publish_target_event;
+
+    part server[1] {
+        event occurrence subscribe_target_event;
+        then event occurrence publish_target_event;
+        then event occurrence deliver_source_event;
+    }
+
+    message subscribe_message from consumer.subscribe_source_event to server.subscribe_target_event;
+    message deliver_message from server.deliver_source_event to consumer.deliver_target_event;
+
+    part consumer {
+        event occurrence subscribe_source_event;
+        then event occurrence deliver_target_event;
+    }
+}`);
+    const pubSub = model.definitions.find((d) => d.name === 'PubSubSequence');
+    if (pubSub?.kind !== 'partDef') throw new Error('expected partDef');
+    expect(pubSub.parts.map((p) => p.name)).toEqual(['producer', 'server', 'consumer']);
+    expect(pubSub.messages).toEqual([
+      { name: 'publish_message', itemType: undefined, from: 'producer.publish_source_event', to: 'server.publish_target_event' },
+      { name: 'subscribe_message', itemType: undefined, from: 'consumer.subscribe_source_event', to: 'server.subscribe_target_event' },
+      { name: 'deliver_message', itemType: undefined, from: 'server.deliver_source_event', to: 'consumer.deliver_target_event' },
+    ]);
+  });
+
+  it('parses an anonymous `message of Type from ... to ...;` with bare (non-dotted) endpoints, per the graphical-notation deck\'s own Sequence View slide', () => {
+    const model = parseSysml(`sysml-v2
+action startVehicle1 {
+    event occurrence doorClosed;
+    event occurrence driverReady;
+    first doorClosed then driverReady;
+
+    message of VehicleStart from turnVehicleOn to trigger1;
+    message of EngineStatus from sendStatus to trigger2;
+}`);
+    const action = model.definitions.find((d) => d.name === 'startVehicle1');
+    if (action?.kind !== 'actionDef') throw new Error('expected actionDef');
+    // `message` inside an *action* body (as opposed to a part def or
+    // occurrence def) isn't captured today — this is out of scope for this
+    // round (see README "Known limitations"): it would need to resolve
+    // which enclosing part performs each named action to know the right
+    // lifelines, not just the message statements themselves. This test
+    // documents that the parser doesn't crash on it and skips it
+    // resiliently, same as any other unrecognized member.
+    expect((action as { messages?: unknown }).messages).toBeUndefined();
+  });
+
   // Use case def/usage grammar below is grounded against the OMG's own
   // training corpus: Systems-Modeling/SysML-v2-Release/sysml/src/training/
   // "35. Use Cases"/{Use Case Definition Example, Use Case Usage Example}.sysml.

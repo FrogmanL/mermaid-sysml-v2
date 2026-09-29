@@ -13,6 +13,8 @@ import type {
   InterfaceDefNode,
   InterfaceEndNode,
   ItemDefNode,
+  MessageNode,
+  OccurrenceDefNode,
   PartDefNode,
   PartUsageNode,
   PerformNode,
@@ -483,6 +485,113 @@ function parsePerform(p: ParserState): PerformNode {
   return { name, target, ordered };
 }
 
+/**
+ * `message [name] [of ItemType] from <path> to <path>;` — see `MessageNode`.
+ * A name is absent only when followed immediately by `of`/`from` (the
+ * anonymous form seen in the graphical-notation deck's own Sequence View
+ * example, `message of VehicleStart from turnVehicleOn to trigger1;`).
+ */
+function parseMessage(p: ParserState): MessageNode {
+  p.expect('message');
+  let name: string | undefined;
+  if (!p.at('of') && !p.at('from')) {
+    name = p.advance().value;
+  }
+  let itemType: string | undefined;
+  if (p.at('of')) {
+    p.advance();
+    itemType = parseQualifiedName(p);
+  }
+  p.expect('from');
+  const from = parseFeaturePath(p);
+  p.expect('to');
+  const to = parseFeaturePath(p);
+  if (p.at(';')) p.advance();
+  return { name, itemType, from, to };
+}
+
+/** `first msgA then msgB [then msgC ...];` — an ordering constraint between message names, inside an `occurrence def` body. See `OccurrenceDefNode.order`. */
+function parseMessageOrderChain(p: ParserState): string[] {
+  p.expect('first');
+  const chain = [p.advance().value];
+  while (p.at('then')) {
+    p.advance();
+    chain.push(p.advance().value);
+  }
+  if (p.at(';')) p.advance();
+  return chain;
+}
+
+/**
+ * `occurrence def Name [:> Super] { ref part p [...]; message ...; first m1
+ * then m2; }` — see `OccurrenceDefNode`. Only the bare `ref part name;`
+ * declaration form is handled (any `:>>`/type/multiplicity after the name is
+ * consumed and discarded); the full redefinition-heavy `occurrence <name> :
+ * Type { part :>> x :>> y { ... } }` *usage* form (seen in the OMG's own
+ * `Interaction Realization-1.sysml`) is out of scope — see README.
+ */
+function parseOccurrenceDef(p: ParserState): OccurrenceDefNode {
+  p.expect('occurrence');
+  p.expect('def');
+  const name = p.advance().value;
+  let superType: string | undefined;
+  if (p.at(':>') || p.at(':')) {
+    p.advance();
+    superType = parseQualifiedName(p);
+  }
+  const def: OccurrenceDefNode = {
+    kind: 'occurrenceDef',
+    name,
+    superType,
+    participants: [],
+    messages: [],
+    order: [],
+  };
+  if (p.at('{')) {
+    p.advance();
+    for (;;) {
+      const doc = skipDocAndComments(p);
+      if (doc && !def.doc) def.doc = doc;
+      if (p.at('}')) {
+        p.advance();
+        break;
+      }
+      if (p.eof()) break;
+      if (p.at('ref') && p.peek(1).value === 'part') {
+        p.advance();
+        p.advance();
+        // `ref part :>> driver;` (no local name — same-name redefinition
+        // shorthand, confirmed against Interaction Example-1.sysml: the
+        // participant's name IS the redefined feature's name) vs. a plain
+        // `ref part name [...];` declaration with the name given directly.
+        let participantName: string;
+        if (p.at(':>>') || p.at(':>') || p.at(':')) {
+          p.advance();
+          participantName = parseQualifiedName(p);
+        } else {
+          participantName = p.advance().value;
+          parseOptionalTypeAndMultiplicity(p);
+        }
+        if (p.at(';')) p.advance();
+        def.participants.push(participantName);
+        continue;
+      }
+      if (p.at('message')) {
+        def.messages.push(parseMessage(p));
+        continue;
+      }
+      if (p.at('first')) {
+        def.order.push(parseMessageOrderChain(p));
+        continue;
+      }
+      skipUnknownMember(p);
+    }
+  } else if (p.at(';')) {
+    p.advance();
+  }
+  return def;
+}
+
 function parsePartBody(p: ParserState, def: PartDefNode): void {
   p.expect('{');
   for (;;) {
@@ -518,6 +627,10 @@ function parsePartBody(p: ParserState, def: PartDefNode): void {
       def.performs.push(parsePerform(p));
       continue;
     }
+    if (p.at('message')) {
+      def.messages.push(parseMessage(p));
+      continue;
+    }
     // Nested defs (including `attribute def`/`enum def` — this subset only
     // recognizes those at the top/package level, matching every other def
     // kind here), actions, states, requirements, satisfy, etc. are outside
@@ -546,6 +659,7 @@ function parsePartDef(p: ParserState): PartDefNode {
     parts: [],
     connectors: [],
     performs: [],
+    messages: [],
   };
   if (p.at('{')) {
     parsePartBody(p, def);
@@ -584,6 +698,7 @@ function parseTopLevelPartUsage(p: ParserState): PartDefNode | undefined {
     parts: [],
     connectors: [],
     performs: [],
+    messages: [],
   };
   parsePartBody(p, def);
   return def;
@@ -1637,6 +1752,10 @@ function parseMembers(
     }
     if (p.at('enum') && p.peek(1).value === 'def') {
       definitions.push(parseEnumDef(p));
+      continue;
+    }
+    if (p.at('occurrence') && p.peek(1).value === 'def') {
+      definitions.push(parseOccurrenceDef(p));
       continue;
     }
     if (p.at('use') && p.peek(1).value === 'case' && p.peek(2).value === 'def') {

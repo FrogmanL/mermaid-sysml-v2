@@ -123,6 +123,25 @@ const getStyles = (options: any): string => `
   stroke: ${options.nodeBorder ?? options.primaryBorderColor ?? '#999'};
   stroke-width: 1px;
 }
+.sysml-v2 line.sequence-lifeline {
+  stroke: ${options.nodeBorder ?? options.primaryBorderColor ?? '#999'};
+  stroke-width: 1px;
+  stroke-dasharray: 4 3;
+}
+.sysml-v2 line.sequence-message-line {
+  stroke: ${options.lineColor ?? '#999'};
+  stroke-width: 1.5px;
+}
+.sysml-v2 polyline.sequence-message-line {
+  stroke: ${options.lineColor ?? '#999'};
+  stroke-width: 1.5px;
+}
+.sysml-v2 polygon.sequence-message-arrow {
+  fill: ${options.lineColor ?? '#999'};
+}
+.sysml-v2 text.sequence-message-label {
+  fill: ${options.textColor ?? options.primaryTextColor ?? '#333'};
+}
 `;
 
 export default getStyles;

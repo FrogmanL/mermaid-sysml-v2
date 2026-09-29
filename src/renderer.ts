@@ -7,6 +7,7 @@ import type {
   ActionUsageNode,
   ConnectorNode,
   DefinitionNode,
+  MessageNode,
   PartUsageNode,
   SendUsage,
   TraceabilityNode,
@@ -299,6 +300,15 @@ function toLeafBox(def: DefinitionNode): LeafBox {
       doc,
       compartments,
     };
+  }
+  if (def.kind === 'occurrenceDef') {
+    // Used only when there's nothing to draw as a Sequence View (see
+    // `prepareSequenceViewBox`) — no participants and no messages.
+    const compartments: RenderCompartment[] = [];
+    if (def.participants.length) {
+      compartments.push({ label: 'participants', lines: def.participants });
+    }
+    return { stereotype: 'occurrence def', name: def.name, rounded: false, doc: def.doc, compartments };
   }
   // actionDef — used only when there's nothing to draw as a flowchart (see
   // `prepareActionFlowBox`); a plain leaf box showing just its parameters.
@@ -1379,6 +1389,238 @@ function prepareActionFlowBox(def: ActionDefNode): PreparedBox {
 }
 
 // ---------------------------------------------------------------------------
+// Sequence View: an `occurrence def`'s (or a `part def`'s own) `message`
+// statements, drawn as a genuine multi-lifeline sequence diagram — one small
+// «part»-stereotyped header box per participant, a dashed lifeline below
+// each, and a solid arrow for each message in time order (top to bottom).
+// Grounded against the OMG's own training corpus ("27. Occurrences"/
+// Interaction Example-1.sysml), `examples/Interaction Sequencing Examples/
+// ServerSequenceModel.sysml`, and the graphical notation deck's own
+// "Sequence View" slide (Scenario_1o). A genuinely different rendering
+// paradigm again — parallel lifelines over a shared time axis, not a
+// layered flowchart — see README for exactly what this does and doesn't
+// resolve (simple first-segment endpoint resolution, one-shot `first`/
+// `then` message ordering, no full occurrence/event-occurrence model).
+// ---------------------------------------------------------------------------
+
+const SEQ_HEADER_MIN_WIDTH = 90;
+const SEQ_LIFELINE_GAP = 50;
+const SEQ_TOP_GAP = 24;
+const SEQ_ROW_HEIGHT = 46;
+const SEQ_BOTTOM_PAD = 16;
+const SEQ_ARROW_LEN = 8;
+const SEQ_ARROW_WIDTH = 7;
+const SEQ_SELF_LOOP_W = 30;
+const SEQ_SELF_LOOP_H = 16;
+
+/** First segment of a dotted/`::`-qualified path — the lifeline a message endpoint resolves to (see `MessageNode`'s doc comment and "Known limitations": a deeper path like `vehicle.cruiseController.x` collapses to the `vehicle` lifeline, same "resolve by simple name" philosophy used for dependency-arrow endpoints elsewhere in this renderer). */
+function messageEndpointRoot(path: string): string {
+  const normalized = path.replace(/::/g, '.');
+  const dot = normalized.indexOf('.');
+  return dot === -1 ? normalized : normalized.slice(0, dot);
+}
+
+function messageLabel(m: MessageNode): string {
+  if (m.name && m.itemType) return `${m.name} : ${m.itemType}`;
+  if (m.name) return m.name;
+  if (m.itemType) return `: ${m.itemType}`;
+  return 'message';
+}
+
+/**
+ * Every declared participant, plus any message endpoint root not already
+ * among them (appended in order of first appearance) — so a message naming
+ * someone never declared as a participant (the graphical notation deck's
+ * own Scenario_1o example has no `ref part` declarations at all, just bare
+ * action names resolved straight from the messages) still gets a lifeline
+ * instead of being silently dropped.
+ */
+function sequenceParticipants(declared: string[], messages: MessageNode[]): string[] {
+  const seen = new Set(declared);
+  const all = [...declared];
+  for (const m of messages) {
+    for (const path of [m.from, m.to]) {
+      const root = messageEndpointRoot(path);
+      if (!seen.has(root)) {
+        seen.add(root);
+        all.push(root);
+      }
+    }
+  }
+  return all;
+}
+
+/**
+ * Orders messages for top-to-bottom layout: `first a then b [then c ...];`
+ * chains (see `OccurrenceDefNode.order`) are "before" constraints between
+ * named messages; anything unconstrained keeps its declaration order,
+ * ties broken by whichever eligible message was declared earliest (a
+ * stable Kahn's-algorithm topological sort) — general rather than overfit
+ * to one example, since the real corpus's own `first`/`then` chain only
+ * orders *some* of its messages, leaving the rest to fall out of
+ * declaration order.
+ */
+function orderMessages(messages: MessageNode[], order: string[][]): MessageNode[] {
+  const indexByName = new Map<string, number>();
+  messages.forEach((m, i) => {
+    if (m.name) indexByName.set(m.name, i);
+  });
+  const before = new Map<number, number[]>();
+  const indegree = new Map<number, number>();
+  messages.forEach((_, i) => indegree.set(i, 0));
+  for (const chain of order) {
+    for (let i = 0; i < chain.length - 1; i++) {
+      const a = indexByName.get(chain[i]);
+      const b = indexByName.get(chain[i + 1]);
+      if (a === undefined || b === undefined) continue;
+      if (!before.has(a)) before.set(a, []);
+      before.get(a)!.push(b);
+      indegree.set(b, (indegree.get(b) ?? 0) + 1);
+    }
+  }
+  const remaining = new Set(messages.map((_, i) => i));
+  const result: MessageNode[] = [];
+  while (remaining.size) {
+    let next = -1;
+    for (const i of remaining) {
+      if ((indegree.get(i) ?? 0) === 0 && (next === -1 || i < next)) next = i;
+    }
+    if (next === -1) next = Math.min(...remaining); // a cycle shouldn't occur in this subset's grammar
+    result.push(messages[next]);
+    remaining.delete(next);
+    for (const b of before.get(next) ?? []) {
+      indegree.set(b, (indegree.get(b) ?? 0) - 1);
+    }
+  }
+  return result;
+}
+
+function drawSequenceMessageArrow(g: G, fromX: number, toX: number, y: number, label: string): void {
+  const dir = toX >= fromX ? 1 : -1;
+  const backX = toX - dir * SEQ_ARROW_LEN;
+  g.append('line')
+    .attr('class', 'sequence-message-line')
+    .attr('x1', fromX)
+    .attr('y1', y)
+    .attr('x2', toX)
+    .attr('y2', y);
+  g.append('polygon')
+    .attr('class', 'sequence-message-arrow')
+    .attr('points', `${toX},${y} ${backX},${y - SEQ_ARROW_WIDTH / 2} ${backX},${y + SEQ_ARROW_WIDTH / 2}`);
+  g.append('text')
+    .attr('class', 'sequence-message-label')
+    .attr('x', (fromX + toX) / 2)
+    .attr('y', y - 6)
+    .attr('text-anchor', 'middle')
+    .attr('font-size', '10px')
+    .text(label);
+}
+
+/** A self-message (both endpoints resolve to the same lifeline) as a small right-hooking loop, the standard UML convention, rather than a degenerate zero-length arrow. */
+function drawSequenceSelfMessageLoop(g: G, x: number, y: number, label: string): void {
+  g.append('polyline')
+    .attr('class', 'sequence-message-line')
+    .attr('fill', 'none')
+    .attr(
+      'points',
+      `${x},${y} ${x + SEQ_SELF_LOOP_W},${y} ${x + SEQ_SELF_LOOP_W},${y + SEQ_SELF_LOOP_H} ${x},${y + SEQ_SELF_LOOP_H}`
+    );
+  const tipY = y + SEQ_SELF_LOOP_H;
+  g.append('polygon')
+    .attr('class', 'sequence-message-arrow')
+    .attr(
+      'points',
+      `${x},${tipY} ${x + SEQ_ARROW_LEN},${tipY - SEQ_ARROW_WIDTH / 2} ${x + SEQ_ARROW_LEN},${tipY + SEQ_ARROW_WIDTH / 2}`
+    );
+  g.append('text')
+    .attr('class', 'sequence-message-label')
+    .attr('x', x + SEQ_SELF_LOOP_W + 4)
+    .attr('y', y + SEQ_SELF_LOOP_H / 2 + 3)
+    .attr('font-size', '10px')
+    .text(label);
+}
+
+function prepareSequenceViewBox(
+  stereotype: string,
+  displayName: string,
+  doc: string | undefined,
+  rounded: boolean,
+  declaredParticipants: string[],
+  rawMessages: MessageNode[],
+  order: string[][]
+): PreparedBox {
+  const headerHeight = PAD + STEREOTYPE_H + TITLE_H + PAD;
+  const participants = sequenceParticipants(declaredParticipants, rawMessages);
+  const messages = orderMessages(rawMessages, order);
+
+  const widths = participants.map((name) =>
+    Math.max(SEQ_HEADER_MIN_WIDTH, estimateTextWidth(name, 13, true) + PAD * 2)
+  );
+  const contentWidth =
+    widths.reduce((sum, w) => sum + w, 0) + Math.max(0, participants.length - 1) * SEQ_LIFELINE_GAP;
+  const lifelineX: number[] = [];
+  {
+    let x = 0;
+    for (const w of widths) {
+      lifelineX.push(x + w / 2);
+      x += w + SEQ_LIFELINE_GAP;
+    }
+  }
+  const contentHeight = headerHeight + SEQ_TOP_GAP + messages.length * SEQ_ROW_HEIGHT + SEQ_BOTTOM_PAD;
+
+  const headerWidth = estimateTextWidth(displayName, 13, true) + PAD * 2;
+  const width = Math.max(MIN_WIDTH, contentWidth + CONTAINER_PAD * 2, headerWidth);
+  const height = headerHeight + (participants.length ? contentHeight + CONTAINER_PAD : CONTAINER_PAD);
+  const xOffset = (width - contentWidth) / 2;
+  const yOffset = headerHeight + CONTAINER_PAD;
+
+  return {
+    width,
+    height,
+    doc,
+    render(node) {
+      boxRect(node, 0, 0, width, height, rounded);
+      drawHeader(node, width, stereotype, displayName);
+
+      const lifelineTop = yOffset + headerHeight;
+      const lifelineBottom = yOffset + contentHeight - SEQ_BOTTOM_PAD;
+      participants.forEach((name, i) => {
+        const cx = xOffset + lifelineX[i];
+        const hx = cx - widths[i] / 2;
+        // Each participant's header is its own `<g class="child">` (same
+        // convention as a container's child boxes) so its `.stereotype`/
+        // `.title` text nests under that group rather than becoming another
+        // direct child of `.node` — which must have exactly one of each
+        // (see `findNodeByTitle` in the test suite).
+        const headerNode = node.append('g').attr('class', 'child').attr('transform', `translate(${hx},${yOffset})`);
+        boxRect(headerNode, 0, 0, widths[i], headerHeight, false);
+        drawHeader(headerNode, widths[i], 'part', name);
+        node
+          .append('line')
+          .attr('class', 'sequence-lifeline')
+          .attr('x1', cx)
+          .attr('y1', lifelineTop)
+          .attr('x2', cx)
+          .attr('y2', lifelineBottom);
+      });
+
+      messages.forEach((m, i) => {
+        const fromIdx = participants.indexOf(messageEndpointRoot(m.from));
+        const toIdx = participants.indexOf(messageEndpointRoot(m.to));
+        if (fromIdx === -1 || toIdx === -1) return;
+        const y = lifelineTop + SEQ_TOP_GAP + i * SEQ_ROW_HEIGHT;
+        const label = messageLabel(m);
+        if (fromIdx === toIdx) {
+          drawSequenceSelfMessageLoop(node, xOffset + lifelineX[fromIdx], y, label);
+        } else {
+          drawSequenceMessageArrow(node, xOffset + lifelineX[fromIdx], xOffset + lifelineX[toIdx], y, label);
+        }
+      });
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Top-level layout and draw
 // ---------------------------------------------------------------------------
 
@@ -1392,6 +1634,32 @@ function toRenderList(definitions: DefinitionNode[]): RenderEntry[] {
   for (const def of definitions) byName.set(def.name, def);
 
   return definitions.map((def): RenderEntry => {
+    if (def.kind === 'partDef' && def.messages.length) {
+      // A Sequence View container (see `ServerSequenceModel.sysml`) takes
+      // priority over the plain composition-tree/connector-container
+      // rendering below, even when the part also has nested `part` usages —
+      // those usages are exactly this view's participants.
+      const { stereotype, displayName } = partStereotypeAndName(def);
+      const participantNames = def.parts.map((usage) => usage.name);
+      return {
+        box: prepareSequenceViewBox(stereotype, displayName, def.doc, !!def.isUsage, participantNames, def.messages, []),
+        def,
+      };
+    }
+    if (def.kind === 'occurrenceDef' && (def.participants.length || def.messages.length)) {
+      return {
+        box: prepareSequenceViewBox(
+          'occurrence def',
+          def.name,
+          def.doc,
+          false,
+          def.participants,
+          def.messages,
+          def.order
+        ),
+        def,
+      };
+    }
     if (def.kind === 'partDef' && def.parts.length) {
       const { stereotype, displayName } = partStereotypeAndName(def);
       const rounded = !!def.isUsage;

@@ -263,26 +263,72 @@ covers:
   `perform action takePhoto[*] ordered references takePicture;` declares a
   new performed-action usage; a sibling part's bare `perform
   takePhoto.focus;` instead performs a specific sub-action of an
-  already-declared one. **Parsed but not yet rendered** — this is groundwork
-  for a future multi-lifeline Sequence View (each performing part would
-  become a lifeline, ordered by the referenced action's own succession
-  chain), not a diagram element on its own yet. Like every other nested-body
-  construct here, a `perform` nested one level inside another part's inline
-  body is skipped along with the rest of that body (see "Known limitations");
-  only a `perform` in a top-level part's own body is captured today.
+  already-declared one. **Parsed but not yet rendered as anything of its
+  own** — the real Sequence View basis turned out to be a different,
+  first-class construct (`message ... from ... to ...;`, immediately below),
+  not this. Like every other nested-body construct here, a `perform` nested
+  one level inside another part's inline body is skipped along with the rest
+  of that body (see "Known limitations"); only a `perform` in a top-level
+  part's own body is captured today.
+- **Sequence View** — SysML v2's actual multi-participant interaction
+  notation, and a genuinely different rendering paradigm again (parallel
+  lifelines over a shared time axis, not a layered flowchart). Confirmed
+  against the OMG's own training corpus (`"27. Occurrences"/Interaction
+  Example-1.sysml`) and its own `examples/Interaction Sequencing Examples/
+  ServerSequenceModel.sysml`, plus the graphical notation deck's own
+  "Sequence View" slide (Scenario_1o):
+  - `message [name] [of ItemType] from <path> to <path>;` — a single
+    message crossing between two participants. Appears either directly in a
+    `part def`'s own body, alongside its nested `part` usages (which then
+    *are* the participants — `ServerSequenceModel.sysml`'s own
+    `PubSubSequence`), or inside a dedicated `occurrence def { ref part
+    p; ...; message ...; }` container (`Interaction Example-1.sysml`'s own
+    `CruiseControlInteraction`) — both render as the same Sequence View.
+    `from`/`to` are resolved only as far as their **first path segment**: a
+    deeper path like `vehicle.cruiseController.x` collapses to the
+    `vehicle` lifeline (see "Known limitations"), the same "resolve by
+    simple name" philosophy already used for dependency-arrow endpoints.
+  - Each participant gets its own small «part»-stereotyped header box with a
+    dashed lifeline below it; each message draws as a solid arrow between
+    two lifelines, top to bottom in time order. A message whose `from`/`to`
+    both resolve to the *same* lifeline (a real case in
+    `Interaction Example-1.sysml`, once endpoints are collapsed to their
+    first segment) draws as a small self-message loop instead of a
+    degenerate zero-length arrow.
+  - **Ordering** — `first msgA then msgB [then msgC ...];` inside an
+    `occurrence def` body (confirmed against `Interaction Example-1.sysml`)
+    states a "before" constraint between named messages; messages it
+    doesn't mention keep their declaration order. A stable topological sort
+    combines the two rather than assuming one `first`/`then` chain orders
+    every message, since the real example's own chain only orders two of
+    its three.
+  - `ref part name;` and the same-name redefinition shorthand `ref part
+    :>> name;` (both seen in `Interaction Example-1.sysml`) declare a
+    participant inside an `occurrence def`; any redefinition/subsetting
+    target on the ordinary `ref part name :>> other;` form is discarded —
+    simple-name only, same as everywhere else in this subset.
+  - **Deliberately out of scope**: `message` statements written directly
+    inside an *action* body (the graphical notation deck's own Scenario_1o
+    slide does this, relying on `perform` elsewhere to say which part runs
+    which named action) — resolving that needs cross-referencing `perform`
+    across sibling parts, not just the message statements themselves; the
+    full redefinition-heavy `occurrence <name> : Type { part :>> x :>> y {
+    ... } }` *usage* form (`Interaction Realization-1.sysml`); and event
+    occurrences themselves (`event occurrence name;` bodies are parsed only
+    far enough to skip them, one level deep, same as any other nested body).
 - `doc /* ... */` comments (shown as a hover tooltip on the box).
 - `import` statements and quoted (`'...'`) identifiers (parsed/tokenized
   correctly, then ignored).
 
 Everything else — `bind`, a `loop`'s own body, `send`/`accept`'s own
-cross-box delivery arrow, actually rendering `perform`/`references` as a
-multi-lifeline Sequence View (parsed already — see "Scope" above — just not
-drawn yet), sequence diagrams as their own dedicated view, state machines,
-views, `copy`, variability modeling (`variation`/
-`variant`), port redefinition, expressions beyond a raw right-hand side —
-is outside this subset. The parser skips unrecognized constructs resiliently
-(structurally, brace-aware) rather than failing the whole diagram, so a real
-file mixing supported and unsupported constructs still renders what it can.
+cross-box delivery arrow, `perform`/`references` as anything beyond the raw
+data captured today (see "Scope" above), `message` statements inside an
+action body, the full redefinition-heavy `occurrence` *usage* form, state
+machines, views, `copy`, variability modeling (`variation`/`variant`), port
+redefinition, expressions beyond a raw right-hand side — is outside this
+subset. The parser skips unrecognized constructs resiliently (structurally,
+brace-aware) rather than failing the whole diagram, so a real file mixing
+supported and unsupported constructs still renders what it can.
 
 ### Validation corpus
 
@@ -308,9 +354,13 @@ fork/join bar, concave/convex message pentagon, solid succession arrow)
 follow the standard, stable UML/SysML activity-diagram convention rather
 than this subset's own invention, same reasoning as the use-case actors —
 but, also like use cases, wasn't independently checked against this deck's
-own Action/Activity Diagram pages. Everything else from page 48 on
-(remaining behavior notation, plus sequence diagrams entirely) is still out
-of scope here.
+own Action/Activity Diagram pages. The Sequence View's own notation (a
+small «part»-stereotyped header box per lifeline, a dashed lifeline below
+each, solid message arrows in time order) *is* independently checked — the
+deck's own "Interactions" module (slide 68, "Sequence View," the Scenario_1o
+example) shows exactly this shape. Everything else from page 48 on
+(remaining behavior notation, state-based behavior, individuals,
+timeslices/snapshots) is still out of scope here.
 
 Checked textual-syntax coverage against real `.sysml` files (read locally
 during development, not vendored into this repo except where noted) from:
@@ -342,10 +392,17 @@ during development, not vendored into this repo except where noted) from:
   Show { item picture : Picture; }`) were found and closed — both parse and
   render now, not just the message vocabulary itself. `"18. Action
   Performance"/Action Performance Example.sysml` drove `perform`/
-  `references` (a part instance performing a shared sub-action, the likely
-  real backing for a proper multi-lifeline Sequence View) — now parsed and
-  structurally captured, though not yet rendered as anything on its own; see
-  "Extending this." `"22. Opaque Actions"` wasn't incorporated yet.
+  `references` (a part instance performing a shared sub-action) — parsed and
+  structurally captured, though it turned out not to be the real Sequence
+  View backing after all (see below); it's still not rendered as anything on
+  its own. `training/"27. Occurrences"/Interaction Example-1.sysml`
+  (`occurrence def`/`ref part`/`message ... from ... to ...;`/`first ...
+  then ...;`) is what actually grounded the Sequence View — SysML v2's real
+  multi-participant interaction construct — along with
+  `examples/Interaction Sequencing Examples/ServerSequenceModel.sysml` (the
+  `message` statements can also live directly in a `part def` body,
+  alongside its own nested `part` usages, not just inside a dedicated
+  `occurrence def`). `"22. Opaque Actions"` wasn't incorporated yet.
 - **[GfSE/SysML-v2-Models](https://github.com/GfSE/SysML-v2-Models)** — a
   community-curated collection (Gesellschaft für Systems Engineering),
   ranging from simple (`example_family/family.sysml`) to genuinely advanced.
@@ -420,6 +477,15 @@ during development, not vendored into this repo except where noted) from:
   were, `coinAcceptor` names a *child inside* `BVM`'s own rendered box, not a
   top-level one. `examples/features/09-requirements.mmd` demonstrates the
   case that *does* resolve — a `by`/`to` target that's a plain top-level name.
+- **A Sequence View message's `from`/`to` resolve by first path segment
+  only**, same simple-name philosophy as the traceability arrows above but
+  even coarser — everything after the first `.` is discarded entirely, not
+  just left unresolved. `vehicle.speedometer.sensedSpeedSent` and
+  `vehicle.cruiseController.sensedSpeedReceived` (both real, from
+  `Interaction Example-1.sysml`) both collapse to the same `vehicle`
+  lifeline, so that message draws as a self-loop instead of distinguishing
+  `speedometer` from `cruiseController` — see
+  `examples/features/15-sequence-view.mmd` and "Extending this."
 - **Dependency arrows sharing an endpoint fan out from its center** (so a
   requirement with both a `satisfy` and a `verify` landing on it stays
   legible) but otherwise use the same straight-line-to-border approach as the
@@ -528,8 +594,9 @@ one small file per feature cluster (definition/usage styling, the
 composition tree, the connector container, nested packages, resilience
 against unsupported constructs, every connector form, specialization
 arrows/subsets/redefines, requirements/traceability, attribute def/item
-def/enum def, use cases, action flowcharts, decide/merge/fork/join/loop, and
-send/accept messaging) for a quick visual tour of the whole plugin;
+def/enum def, use cases, action flowcharts, decide/merge/fork/join/loop,
+send/accept messaging, and the Sequence View) for a quick visual tour of the
+whole plugin;
 `index.html`'s dropdown has a "Feature showcase" group listing them all.
 
 ## Development
@@ -545,24 +612,33 @@ npm run build   # emits dist/mermaid-sysml-v2.core.mjs + .d.ts files
 
 Natural next steps, roughly in order of value:
 
-1. **A real, multi-lifeline Sequence View.** `send`/`accept` (see "Scope"
-   above) are the message vocabulary, now drawn as pentagon nodes inside a
-   single action's own flowchart — but a genuine sequence diagram shows
-   *multiple participants* as parallel lifelines with messages crossing
-   between them over a shared time axis, which is a different rendering
-   paradigm again (like the jump from compartmented boxes to the action
-   flowchart was). The likely missing piece to properly attribute which
-   participant does what, `perform`/`references` (grounded from the OMG's
-   own `training/"18. Action Performance"/Action Performance Example.sysml`
-   — a part instance "performing" a named sub-action of a shared behavior,
-   e.g. `part f : AutoFocus { perform takePhoto.focus; }`), is now parsed and
-   structurally captured (see "Scope" above) — but still not rendered as
-   anything, and still only captured one level deep (a `perform` nested
-   inside another part's inline body is skipped, same as any other nested
-   body here). The actual lifeline layout/rendering, and extending capture to
-   nested parts, are both still open. This would also be what finally
-   resolves a `send`'s `to`/`via` cross-box delivery target (see "Known
-   limitations").
+1. **Sequence View follow-ups.** The real multi-lifeline Sequence View
+   landed (see "Scope" above) — `message ... from ... to ...;`, not
+   `perform`/`references`, turned out to be the actual first-class
+   cross-participant construct (`perform` is about attributing one action's
+   sub-steps to different owners within a single hierarchy, not a message
+   crossing between lifelines). What's still open on top of it:
+   - **`message` statements inside an action body** (the graphical notation
+     deck's own Scenario_1o slide does this: `action startVehicle1 { ...
+     message of VehicleStart from turnVehicleOn to trigger1; }`) — resolving
+     these needs cross-referencing `perform` across sibling parts to know
+     which part actually runs `turnVehicleOn`/`trigger1`, so this is where
+     `perform`/`references` parsing (already done) would finally earn its
+     keep.
+   - **Better than first-path-segment endpoint resolution** — a message like
+     `vehicle.speedometer.sensedSpeedSent` collapses to the `vehicle`
+     lifeline today (see "Known limitations"), which is why
+     `examples/features/15-sequence-view.mmd`'s own `sensedSpeedMessage`
+     draws as a self-loop instead of a `vehicle` → `vehicle` distinction
+     between `speedometer` and `cruiseController`. Resolving through nested
+     containment (same problem as the connector container's own "one level
+     deep" limit) would let sub-parts become their own lifelines.
+   - **The full redefinition-heavy `occurrence <name> : Type { part :>> x
+     :>> y { ... } }` usage form** (`Interaction Realization-1.sysml`) isn't
+     parsed — only a plain `occurrence def` with bare `ref part`
+     declarations is.
+   - This would also be what finally resolves a `send`'s `to`/`via`
+     cross-box delivery target (see "Known limitations").
 2. **Order/sequencing between a use case's steps** — each `include`/nested
    `use case` step now draws its own relationship (see "Scope" above), but
    not the `first`/`then`/`done` order they actually run in. Reusing the
