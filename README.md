@@ -21,6 +21,15 @@ use cases, and a genuine flowchart — start/done nodes, decision/merge
 diamonds, fork/join bars, concave/convex message pentagons, solid succession
 arrows, dashed data-flow arrows — for actions.
 
+## Try it
+
+```bash
+npm install
+npm run dev   # live demo at http://localhost:5173 — pick an example from the dropdown, edits re-render
+```
+
+See "Development" below for the full command set (tests, build).
+
 ## Why this exists
 
 [mermaid-js/mermaid#6317](https://github.com/mermaid-js/mermaid/issues/6317)
