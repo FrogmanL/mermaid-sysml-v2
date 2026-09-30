@@ -1,0 +1,52 @@
+// Feature: activity/action diagrams, round 1 — `action def`/usage with
+// in/out params, nested action containment (one level deep, same
+// convention as the connector container), a genuine flowchart renderer
+// (filled start circle, bordered "final" circle for done, rounded action
+// nodes), solid succession arrows (with a bracketed guard label where one
+// was given), and dashed data-flow arrows (reusing the same shape built
+// for satisfy/verify/trace/allocate/include).
+//
+// Grounded against the OMG's own training corpus: Systems-Modeling/
+// SysML-v2-Release/sysml/src/training/"14. Action Definitions" through
+// "17. Control". TakePicture below is the "Conditional Succession
+// Example-1" idiom almost verbatim (first/then, a guarded branch, and a
+// data flow between two actions' items).
+//
+// Deliberately out of scope for this round: `bind` (parsed, not drawn),
+// and the `decide`/`merge`/`fork`/`join`/`loop` control-node vocabulary —
+// a succession running through one of those isn't recorded, rather than
+// misrepresented (see examples/bvm.mmd... no, see this file's own repo
+// README "Known limitations" for the real evidence: the OMG's own
+// Decision Example.sysml only keeps 2 of its 6 real successions once
+// decide/merge are involved).
+package ActionFlowcharts {
+  action def Focus { in scene : Scene; out image : Image; }
+  action def Shoot { in image : Image; out picture : Picture; }
+
+  action def TakePicture {
+    in scene : Scene;
+    out picture : Picture;
+
+    action focus : Focus { in scene; out image; }
+    first focus
+      if focus.image.isWellFocused then shoot;
+    flow from focus.image to shoot.image;
+    action shoot : Shoot { in image; out picture; }
+  }
+
+  // A plain linear chain (no branching) showing the start/done pseudo-nodes.
+  action def Display { in picture : Picture; }
+
+  action def ShowPicture {
+    first start;
+    then action takePicture : TakePicture { in scene; out picture; }
+    then action display : Display { in picture; }
+    then done;
+  }
+
+  part def Scene;
+  part def Image {
+    attribute isWellFocused : Boolean;
+  }
+  part def Picture;
+}

@@ -23,9 +23,12 @@ Development Host from source.
 2. Press **F5** (`Run Extension`). This builds the extension first (see
    `.vscode/tasks.json`) and opens a second VS Code window with the
    extension loaded.
-3. In that new window, open `examples/demo.md` and open its preview
-   (`Ctrl+Shift+V` / `Cmd+Shift+V`). The two ```sysml-v2 fenced blocks should
-   render as diagrams instead of plain text.
+3. In that new window, open `examples/markdown/demo.md` (it opens
+   automatically) and open its preview (`Ctrl+Shift+V` / `Cmd+Shift+V`). The
+   two ```sysml-v2 fenced blocks should render as diagrams instead of plain
+   text.
+4. To try the `.sysml` preview, open any file under `examples/sysml/` (see
+   "`.sysml` files" below).
 
 I can't launch a VS Code GUI from here to verify this myself — the build
 (`npm run build`, below) and the markdown-it unit tests are checked, but the
@@ -41,6 +44,11 @@ npm run typecheck -w vscode-sysml-v2
 ```
 
 ## `.sysml` files
+
+`examples/sysml/` has the same models as the `mermaid-sysml-v2` package's
+`examples/` (`.mmd` there), converted to plain `.sysml` files (without the
+leading `sysml-v2` header line). `examples/markdown/demo.md` is the Markdown
+preview demo.
 
 Open any `.sysml` file and click the preview button in the editor title bar
 (or run **SysML v2: Open Preview** from the command palette, or right-click

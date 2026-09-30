@@ -1,0 +1,41 @@
+// Feature: requirements & traceability — `requirement def`, a `requirement`
+// usage (always drawn even body-less, since satisfy/verify/trace/allocate/
+// derive need a box to point at), a dashed dependency arrow for each of
+// `satisfy`/`verify`/`trace`/`allocate`, and a `«derive»` arrow for a
+// requirement usage's `:>` derivation — SysML v2 has no standalone
+// `deriveReqt` keyword, so derivation is modeled as ordinary usage
+// subsetting (confirmed against examples/bvm.mmd's own
+// `requirement req004 : ProductDispensingReq :> req012;`).
+//
+// Only `satisfy` is confirmed against a real corpus file; `verify`/`trace`/
+// `allocate` follow the same grammar shape per the spec but haven't turned
+// up in a local example yet.
+//
+// Every arrow here resolves because each `by`/`to` target is a single
+// top-level name — bvm.mmd's own satisfy statements use a multi-segment
+// instance path (`by bvm.coinAcceptor`) instead, which this subset doesn't
+// resolve to a box (see README "Known limitations").
+package Requirements {
+  requirement def NoUnpaidDispensingReq {
+    doc /* REQ-012 — top-level safety constraint other requirements derive from. */
+    subject sys012 : ProductDispenser;
+  }
+  requirement def ProductDispensingReq {
+    doc /* REQ-004 — dispense once payment is received. */
+    subject sys004 : ProductDispenser;
+  }
+
+  requirement req012 : NoUnpaidDispensingReq;
+  requirement req004 : ProductDispensingReq :> req012;
+
+  part def ProductDispenser;
+
+  satisfy req004 by ProductDispenser;
+  verify req004 by AcceptanceTest;
+  trace req004 to DesignDoc;
+  allocate ControlSoftware to ProductDispenser;
+
+  part def AcceptanceTest;
+  part def DesignDoc;
+  part def ControlSoftware;
+}

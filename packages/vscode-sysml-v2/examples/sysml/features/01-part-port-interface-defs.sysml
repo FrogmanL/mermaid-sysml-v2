@@ -1,0 +1,33 @@
+// Feature: compartmented definition boxes — attributes (both `:` and `:>`
+// typed, and `=` valued), a part's own ports, a port def's flow properties
+// (in/out, item/ref modifiers, a conjugated `~Type`), and an interface def's
+// ends + flows. Hover Engine to see its `doc` comment as a tooltip.
+package Definitions {
+  doc /* Provides drive torque to the transmission. */
+  part def Engine {
+    attribute mass :> ISQ::mass;
+    attribute maxPower = 250;
+    port driveOut : DriveIF;
+  }
+
+  part def Hallway {
+    port classExit : ~EntryWay;
+  }
+
+  port def EntryWay {
+    in ref student : Student;
+  }
+
+  port def DriveIF {
+    out item torque : Real;
+    in dischargeSignal : Boolean;
+  }
+
+  part def Student;
+
+  interface def EngineToTransmission_IF {
+    end drive : DriveIF;
+    end input : ~DriveIF;
+    flow drive.torque to input.torque;
+  }
+}
