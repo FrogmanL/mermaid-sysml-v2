@@ -2,7 +2,7 @@
   "name": "vscode-sysml-v2",
   "displayName": "SysML v2 Preview",
   "description": "Renders SysML v2 diagrams (via mermaid-sysml-v2): sysml-v2 fenced blocks in VS Code's Markdown preview, and a live preview panel for .sysml files.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "unpublished",
   "private": true,
   "license": "MIT",
