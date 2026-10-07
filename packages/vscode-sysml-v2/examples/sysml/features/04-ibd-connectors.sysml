@@ -4,6 +4,7 @@
 // an arrowhead at the target, and a label for the conveyed item. The two
 // h -> c flows below share one child.port pair and collapse into a single
 // deduped line (labeled with whichever's item name is seen first).
+private import ScalarValues::*;
 part def RoomContext {
   part h : Hallway;
   part c : Classroom;

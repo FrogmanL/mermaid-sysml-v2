@@ -19,6 +19,7 @@
 // README "Known limitations" for the real evidence: the OMG's own
 // Decision Example.sysml only keeps 2 of its 6 real successions once
 // decide/merge are involved).
+private import ScalarValues::*;
 package ActionFlowcharts {
   action def Focus { in scene : Scene; out image : Image; }
   action def Shoot { in image : Image; out picture : Picture; }

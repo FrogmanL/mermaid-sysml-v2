@@ -22,9 +22,23 @@ package SequenceViewExample {
   item def SensedSpeed;
   item def FuelCommand;
 
+  part def Driver { event occurrence setSpeedSent; }
+  part def Speedometer { event occurrence sensedSpeedSent; }
+  part def CruiseController {
+    event occurrence setSpeedReceived;
+    event occurrence sensedSpeedReceived;
+    event occurrence fuelCommandSent;
+  }
+  part def Engine { event occurrence fuelCommandReceived; }
+  part def Vehicle {
+    part cruiseController : CruiseController;
+    part speedometer : Speedometer;
+    part engine : Engine;
+  }
+
   occurrence def CruiseControlInteraction {
-    ref part :>> driver;
-    ref part :>> vehicle;
+    ref part driver : Driver;
+    ref part vehicle : Vehicle;
 
     message setSpeedMessage of SetSpeed
       from driver.setSpeedSent to vehicle.cruiseController.setSpeedReceived;

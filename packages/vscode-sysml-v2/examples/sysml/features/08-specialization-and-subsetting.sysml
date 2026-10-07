@@ -14,6 +14,7 @@
 // no arrow is drawn for it — only a supertype actually present as its own
 // definition gets one (see Vehicle/Machine and FrontAxle/Axle above).
 package SpecializationAndSubsetting {
+  private import ScalarValues::*;
   part def Machine {
     attribute totalMass;
   }
@@ -33,8 +34,10 @@ package SpecializationAndSubsetting {
     out transferredTorque : Real;
   }
 
-  part def Family {
+  part def Household {
     part adultMember : Person;
+  }
+  part def Family :> Household {
     part socialService :>> adultMember;
   }
   part def Person;

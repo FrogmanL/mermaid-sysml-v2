@@ -3,6 +3,8 @@
 // (in/out, item/ref modifiers, a conjugated `~Type`), and an interface def's
 // ends + flows. Hover Engine to see its `doc` comment as a tooltip.
 package Definitions {
+  private import ScalarValues::*;
+  item def Torque;
   doc /* Provides drive torque to the transmission. */
   part def Engine {
     attribute mass :> ISQ::mass;
@@ -19,7 +21,7 @@ package Definitions {
   }
 
   port def DriveIF {
-    out item torque : Real;
+    out item torque : Torque;
     in dischargeSignal : Boolean;
   }
 

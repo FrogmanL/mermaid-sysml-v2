@@ -4,6 +4,7 @@
 // them — including two constructs in a row, which used to trigger a real
 // bug (see git history: skipUnknownMember not stopping after its own brace).
 package Resilience {
+  private import ScalarValues::*;
   attribute def IgnoredValueType {
     attribute id : String;
   }
@@ -18,7 +19,7 @@ package Resilience {
   }
 
   port def ReadingPort {
-    out item value : Real;
+    out attribute value : Real;
   }
 
   state def IgnoredStateMachine {

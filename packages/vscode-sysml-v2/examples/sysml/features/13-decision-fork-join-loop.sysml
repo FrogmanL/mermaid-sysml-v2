@@ -12,6 +12,7 @@
 // Control Structures Example.sysml's loop idiom — the loop's own body is
 // parsed only far enough to skip it (one level deep, same as any other
 // nested action), but it still gets a node of its own.
+private import ScalarValues::*;
 package DecisionForkJoinLoop {
   action def MonitorBattery { out charge : Real; }
   action def AddCharge { in charge : Real; }

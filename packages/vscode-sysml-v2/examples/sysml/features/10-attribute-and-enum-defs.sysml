@@ -9,6 +9,7 @@
 // way here as on any other definition kind — a hollow-triangle arrow from
 // InventoryItem to PhysicalItem.
 package AttributeAndEnumDefs {
+  private import ScalarValues::*;
   attribute def PhysicalItem {
     attribute mass : Real;
   }
@@ -28,7 +29,7 @@ package AttributeAndEnumDefs {
     port dispenseOut : DispensePort;
   }
   port def DispensePort {
-    out item productId : String;
-    in item dispenseResult : DispenseResult;
+    out attribute productId : String;
+    in attribute dispenseResult : DispenseResult;
   }
 }

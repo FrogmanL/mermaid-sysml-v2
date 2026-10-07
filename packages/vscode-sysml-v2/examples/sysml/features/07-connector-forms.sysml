@@ -9,6 +9,7 @@
 // DeviceConn is a connection def, analogous to an interface def but for a
 // plain part-to-part link with no port requirement.
 package ConnectorForms {
+  private import ScalarValues::*;
   part def AdultLink {
     part woman : Person;
     part man : Person;
@@ -36,6 +37,10 @@ package ConnectorForms {
   }
   port def ExchangePort;
   part def Entity;
+  connection def Child {
+    end part mother : Entity;
+    end part father : Entity;
+  }
 
   connection def DeviceConn {
     end part hub : Hub;

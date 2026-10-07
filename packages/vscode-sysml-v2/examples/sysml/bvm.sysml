@@ -49,7 +49,7 @@ package BeverageVendingMachine {
 
         attribute balance : Real;                    // REQ-013: persists across resets
         attribute selectedProduct : Product;
-        part inventory : Product[8];                  // REQ-011: >= 8 slots
+        attribute inventory : Product[8];                  // REQ-011: >= 8 slots
 
         state controlUnitStates : ControlUnitStateMachine;
     }
@@ -76,17 +76,17 @@ package BeverageVendingMachine {
     // ---------------------------------------------------------------
 
     port def CoinPort {
-        out item coin : Real;                          // coin value
+        out attribute coin : Real;                          // coin value
     }
 
     port def DisplayPort {
-        out item line1 : String;
-        out item line2 : String;
+        out attribute line1 : String;
+        out attribute line2 : String;
     }
 
     port def DispensePort {
-        out item productId : String;
-        in item dispenseResult : DispenseResult;
+        out attribute productId : String;
+        in attribute dispenseResult : DispenseResult;
     }
 
     enum def DispenseResult {
@@ -233,12 +233,12 @@ package BVMRequirements {
         subject sys012 : ProductDispenser;
     }
 
-    requirement def ProductDispensingReq {
+    requirement def ProductDispensingReq :> NoUnpaidDispensingReq {
         doc /* REQ-004 — Product Dispensing
              * The BVM shall dispense the selected product once payment equal to
              * or greater than its price has been received.
              * Verification: Test */
-        subject sys004 : ProductDispenser;
+        subject sys004 :>> sys012 : ProductDispenser;
     }
 
     requirement def ChangeReturnReq {
@@ -257,13 +257,13 @@ package BVMRequirements {
         subject sys006 : ControlUnit;
     }
 
-    requirement def DispenseFailureRecoveryReq {
+    requirement def DispenseFailureRecoveryReq :> NoUnpaidDispensingReq {
         doc /* REQ-007 — Dispense-Failure Recovery
              * If the BVM cannot dispense a paid-for product (e.g. mechanical jam),
              * it shall enter an Out-of-Service state, display a service message,
              * and return the payment received for that transaction.
              * Verification: Test */
-        subject sys007 : ProductDispenser;
+        subject sys007 :>> sys012 : ProductDispenser;
     }
 
     requirement def CoinSlotInterfaceReq {
