@@ -71,6 +71,16 @@ describe('parseSysml', () => {
     ]);
   });
 
+  it('parses `out attribute name : Type` port def fields (valid per the Pilot Implementation)', () => {
+    const model = parseSysml('port def CoinPort { out attribute coin : Real; in attribute x : String; }');
+    const def = model.definitions[0];
+    if (def?.kind !== 'portDef') throw new Error('expected portDef');
+    expect(def.fields).toEqual([
+      { direction: 'out', name: 'coin', type: 'Real', typeKind: undefined },
+      { direction: 'in', name: 'x', type: 'String', typeKind: undefined },
+    ]);
+  });
+
   it('parses interface def ends, doc, and flows', () => {
     const model = parseSysml(vehicleSource);
     const mounting = model.definitions.find((d) => d.name === 'Mounting');
@@ -647,7 +657,8 @@ part def Vehicle {
 
     const controlUnit = model.definitions.find((d) => d.name === 'ControlUnit');
     if (controlUnit?.kind !== 'partDef') throw new Error('expected partDef');
-    expect(controlUnit.parts.find((p) => p.name === 'inventory')?.type).toBe('Product');
+    // `inventory` is an attribute typed by the attribute def Product (a part may not be typed by an attribute def in SysML v2).
+    expect(controlUnit.attributes.find((a) => a.name === 'inventory')?.type).toBe('Product');
   });
 
   it('parses a bare item def, same shape as attribute def (Messaging Example)', () => {
@@ -1379,5 +1390,133 @@ part camera {
     // throwing; the action's own send/accept content isn't reachable from
     // outside the part in this subset.
     expect(model.definitions.map((d) => d.name)).toEqual(['Focus', 'TakePicture', 'camera']);
+  });
+});
+
+describe('valid SysML v2 constructs beyond the original subset', () => {
+  it('parses `flow of Type from a to b` and keeps the payload type', () => {
+    const model = parseSysml(`part def Sys {
+  part a : A;
+  part b : B;
+  flow of Msg from a.out1.m to b.in1.m;
+  flow named of Other from a.out2 to b.in2;
+}`);
+    const sys = model.definitions[0];
+    if (sys.kind !== 'partDef') throw new Error('expected partDef');
+    expect(sys.connectors).toEqual([
+      { name: undefined, itemType: 'Msg', ends: ['a.out1.m', 'b.in1.m'] },
+      { name: 'named', itemType: 'Other', ends: ['a.out2', 'b.in2'] },
+    ]);
+  });
+
+  it('keeps flows without `of` unchanged (no itemType key)', () => {
+    const model = parseSysml('part def S { part a : A; part b : B; flow from a.p to b.p; }');
+    const s = model.definitions[0];
+    if (s.kind !== 'partDef') throw new Error('expected partDef');
+    expect(s.connectors).toEqual([{ name: undefined, ends: ['a.p', 'b.p'] }]);
+  });
+
+  it('parses a verification def and records each `verify` as traceability', () => {
+    const model = parseSysml(`verification def AcceptanceTest {
+  subject unit : Dispenser;
+  objective { verify req004; verify req007; }
+}`);
+    expect(model.definitions[0]).toMatchObject({
+      kind: 'verificationDef',
+      name: 'AcceptanceTest',
+      subject: { name: 'unit', type: 'Dispenser' },
+      verifies: ['req004', 'req007'],
+    });
+    expect(model.traceability).toEqual([
+      { kind: 'verify', source: 'req004', target: 'AcceptanceTest' },
+      { kind: 'verify', source: 'req007', target: 'AcceptanceTest' },
+    ]);
+  });
+
+  it('parses `dependency [name] from a to b` as traceability, with or without a name', () => {
+    const model = parseSysml('dependency t1 from req1 to doc1;\ndependency from req2 to doc2;');
+    expect(model.traceability).toEqual([
+      { kind: 'dependency', source: 'req1', target: 'doc1' },
+      { kind: 'dependency', source: 'req2', target: 'doc2' },
+    ]);
+  });
+
+  it('keeps a body-less top-level part usage only when a traceability statement names it', () => {
+    const model = parseSysml(`requirement req1 : R;
+part used : U;
+part unused : U;
+satisfy req1 by used;`);
+    const names = model.definitions.map((d) => d.name);
+    expect(names).toContain('used');
+    expect(names).not.toContain('unused');
+  });
+
+  it('keeps the type of a redefined subject (`subject s :>> base : T`)', () => {
+    const model = parseSysml('requirement def R :> Base { subject s4 :>> s12 : Dispenser; }');
+    expect(model.definitions[0]).toMatchObject({ kind: 'requirementDef', subject: { name: 's4', type: 'Dispenser' } });
+  });
+
+  it('collects nested item/port trees from a part usage body, including anonymous redefinitions', () => {
+    const model = parseSysml(`part def Sys {
+  part dvd : DVDPlayer {
+    port :>> hdmiOut {
+      out item :>> video {
+        item param1 :> parameter;
+        item param2 :> parameter;
+      }
+    }
+  }
+  part plain : Other;
+}`);
+    const sys = model.definitions[0];
+    if (sys.kind !== 'partDef') throw new Error('expected partDef');
+    expect(sys.parts[0].items).toEqual([
+      {
+        label: 'port :>> hdmiOut',
+        ref: 'hdmiOut',
+        children: [
+          {
+            label: 'out :>> video',
+            ref: 'video',
+            children: [
+              { label: 'param1 :> parameter', ref: 'param1', children: [] },
+              { label: 'param2 :> parameter', ref: 'param2', children: [] },
+            ],
+          },
+        ],
+      },
+    ]);
+    expect(sys.parts[1].items).toBeUndefined();
+  });
+});
+
+describe('dependencies inside a part body', () => {
+  it('parses `dependency from a::b to c::d;` with qualified paths, normalized to dotted', () => {
+    const model = parseSysml('part def Sys { dependency from capture::usbOut::p1 to dvd::hdmiOut::p1; part dvd : D; }');
+    const sys = model.definitions[0];
+    if (sys.kind !== 'partDef') throw new Error('expected partDef');
+    expect(sys.dependencies).toEqual([{ source: 'capture.usbOut.p1', target: 'dvd.hdmiOut.p1' }]);
+  });
+});
+
+describe('header stripping', () => {
+  it('keeps a single-line model that has no sysml-v2 header', () => {
+    expect(parseSysml('part def A;').definitions.map((d) => d.name)).toEqual(['A']);
+  });
+  it('treats a lone `sysml-v2` line as an empty model', () => {
+    expect(parseSysml('sysml-v2').definitions).toEqual([]);
+  });
+});
+
+describe('attribute multiplicity', () => {
+  it('keeps `[mult]` on attribute and item members, before or after the type', () => {
+    const model = parseSysml('part def P { attribute inventory : Product[8]; attribute xs[2..*] : Real; item parameter : Param [1..*]; }');
+    const def = model.definitions[0];
+    if (def?.kind !== 'partDef') throw new Error('expected partDef');
+    expect(def.attributes.map((a) => [a.name, a.type, a.multiplicity])).toEqual([
+      ['inventory', 'Product', '8'],
+      ['xs', 'Real', '2..*'],
+      ['parameter', 'Param', '1..*'],
+    ]);
   });
 });

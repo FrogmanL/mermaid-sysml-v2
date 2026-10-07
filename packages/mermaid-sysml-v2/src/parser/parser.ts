@@ -22,6 +22,8 @@ import type {
   PortFieldNode,
   PortRefNode,
   RequirementDefNode,
+  VerificationDefNode,
+  NestedItemNode,
   RequirementSubjectNode,
   SuccessionNode,
   SysmlModel,
@@ -142,10 +144,10 @@ function parseRawUntil(p: ParserState, terminators: string[]): string {
     .trim();
 }
 
-/** A dotted feature path (`woman`, `h.exit.air`) — self-terminating, since it only ever consumes ident/`.` tokens. */
+/** A dotted feature path (`woman`, `h.exit.air`; a `::`-qualified one like `a::b` is normalized to dots) — self-terminating, since it only ever consumes ident/`.`/`::` tokens. */
 function parseFeaturePath(p: ParserState): string {
   const parts: string[] = [p.advance().value];
-  while (p.at('.')) {
+  while (p.at('.') || p.at('::')) {
     p.advance();
     parts.push(p.advance().value);
   }
@@ -287,20 +289,14 @@ function parseImport(p: ParserState): void {
 function parseAttributeLike(p: ParserState, keyword: string): AttributeNode {
   p.expect(keyword);
   const name = p.advance().value;
-  let type: string | undefined;
-  let typeKind: TypeRelation | undefined;
-  const rel = parseTypeIntroducer(p);
-  if (rel.present) {
-    type = parseQualifiedName(p);
-    typeKind = rel.kind;
-  }
+  const { type, typeKind, multiplicity } = parseOptionalTypeAndMultiplicity(p);
   let value: string | undefined;
   if (p.at('=')) {
     p.advance();
     value = parseRawUntil(p, [';']);
   }
   if (p.at(';')) p.advance();
-  return { name, type, typeKind, value };
+  return { name, type, typeKind, multiplicity, value };
 }
 
 function parseAttribute(p: ParserState): AttributeNode {
@@ -340,15 +336,66 @@ function parsePartUsage(p: ParserState): PartUsageNode | undefined {
   }
   const name = p.advance().value;
   const { type, typeKind, multiplicity } = parseOptionalTypeAndMultiplicity(p);
+  let items: NestedItemNode[] | undefined;
   if (p.at('{')) {
-    // A usage's inline body (redefinitions, further nested containment) is
-    // outside this subset's rendering depth (see README) — skip it.
-    skipBalancedBraceBlock(p);
+    // The inline body is only mined for nested item/port structure (see
+    // `parseNestedBody`); everything else in it (redefinitions of parts,
+    // further containment) is still outside this subset's rendering depth.
+    const nested = parseNestedBody(p);
+    if (nested.length) items = nested;
     if (p.at(';')) p.advance();
   } else if (p.at(';')) {
     p.advance();
   }
-  return { name, type, typeKind, multiplicity };
+  return items ? { name, type, typeKind, multiplicity, items } : { name, type, typeKind, multiplicity };
+}
+
+function nestedLabel(direction: string | undefined, keyword: string | undefined, name: string | undefined, type?: string, kind?: TypeRelation, mult?: string): string {
+  const parts: string[] = [];
+  if (direction) parts.push(direction);
+  if (keyword) parts.push(keyword);
+  if (name) parts.push(name);
+  if (type) parts.push(`${kind ?? ':'} ${type}`);
+  let label = parts.join(' ');
+  if (mult) label += ` [${mult}]`;
+  return label;
+}
+
+/**
+ * The inside of a part usage's `{ ... }`: collects `[in|out|inout] [ref] item [name] [: | :> | :>> Type] [mult] ;|{...}` and
+ * `port [name] [: | :> | :>> Type] { ... }` into a display tree, recursing into their own bodies. Anything else is skipped.
+ * An anonymous redefinition (`item :>> video`) has no name of its own: its label is just the relation and the redefined feature.
+ */
+function parseNestedBody(p: ParserState): NestedItemNode[] {
+  p.expect('{');
+  const out: NestedItemNode[] = [];
+  for (;;) {
+    skipDocAndComments(p);
+    if (p.at('}')) {
+      p.advance();
+      break;
+    }
+    if (p.eof()) break;
+    let direction: string | undefined;
+    if (p.at('in') || p.at('out') || p.at('inout')) direction = p.advance().value;
+    if (p.at('ref')) p.advance();
+    if (p.at('item') || p.at('port')) {
+      const keyword = p.advance().value;
+      const name = p.atIdent() ? p.advance().value : undefined;
+      const { type, typeKind, multiplicity } = parseOptionalTypeAndMultiplicity(p);
+      const node: NestedItemNode = {
+        label: nestedLabel(direction, keyword === 'port' ? 'port' : undefined, name, type, typeKind, multiplicity),
+        ref: name ?? (typeKind === ':>>' || typeKind === ':>' ? type : undefined),
+        children: [],
+      };
+      if (p.at('{')) node.children = parseNestedBody(p);
+      if (p.at(';')) p.advance();
+      if (keyword === 'item' || node.children.length) out.push(node);
+      continue;
+    }
+    skipUnknownMember(p);
+  }
+  return out;
 }
 
 /**
@@ -390,15 +437,21 @@ function parseConnectorLike(p: ParserState): ConnectorNode {
   }
 
   let name: string | undefined;
-  if (!p.at('from') && !p.at('to') && p.peek(1).value === 'from') {
+  if (!p.at('from') && !p.at('to') && !p.at('of') && (p.peek(1).value === 'from' || p.peek(1).value === 'of')) {
     name = p.advance().value;
+  }
+  let itemType: string | undefined;
+  if (p.at('of')) {
+    p.advance();
+    itemType = parseQualifiedName(p);
+    parseOptionalMultiplicity(p);
   }
   if (p.at('from')) p.advance();
   const from = parseConnectorEndpoint(p);
   p.expect('to');
   const to = parseConnectorEndpoint(p);
   if (p.at(';')) p.advance();
-  return { name, ends: [from, to] };
+  return itemType ? { name, itemType, ends: [from, to] } : { name, ends: [from, to] };
 }
 
 /**
@@ -606,6 +659,10 @@ function parsePartBody(p: ParserState, def: PartDefNode): void {
       def.attributes.push(parseAttribute(p));
       continue;
     }
+    if (p.at('item') && p.peek(1).value !== 'def') {
+      def.attributes.push(parseItemMember(p));
+      continue;
+    }
     if (p.at('port') && p.peek(1).value !== 'def') {
       def.ports.push(parsePortRef(p));
       continue;
@@ -629,6 +686,10 @@ function parsePartBody(p: ParserState, def: PartDefNode): void {
     }
     if (p.at('message')) {
       def.messages.push(parseMessage(p));
+      continue;
+    }
+    if (p.at('dependency')) {
+      (def.dependencies ??= []).push(...parseDependency(p).map(({ source, target }) => ({ source, target })));
       continue;
     }
     // Nested defs (including `attribute def`/`enum def` — this subset only
@@ -675,7 +736,7 @@ function parsePartDef(p: ParserState): PartDefNode {
  * for the body-less instantiation-reference form (`part bvm : BVM;`) — with
  * no attributes/parts/connectors of its own, there's nothing worth drawing.
  */
-function parseTopLevelPartUsage(p: ParserState): PartDefNode | undefined {
+function parseTopLevelPartUsage(p: ParserState, bodyless?: PartDefNode[]): PartDefNode | undefined {
   p.expect('part');
   if (!p.atIdent()) {
     skipUnknownMember(p);
@@ -683,10 +744,6 @@ function parseTopLevelPartUsage(p: ParserState): PartDefNode | undefined {
   }
   const name = p.advance().value;
   const { type: usageType, typeKind: usageTypeKind } = parseOptionalTypeAndMultiplicity(p);
-  if (!p.at('{')) {
-    if (p.at(';')) p.advance();
-    return undefined;
-  }
   const def: PartDefNode = {
     kind: 'partDef',
     name,
@@ -700,13 +757,20 @@ function parseTopLevelPartUsage(p: ParserState): PartDefNode | undefined {
     performs: [],
     messages: [],
   };
+  if (!p.at('{')) {
+    if (p.at(';')) p.advance();
+    // Not drawn on its own, but remembered: a satisfy/dependency/allocate/verify statement that
+    // names it needs a box to point at (see `parseSysml`).
+    bodyless?.push(def);
+    return undefined;
+  }
   parsePartBody(p, def);
   return def;
 }
 
 function parsePortField(p: ParserState): PortFieldNode {
   const direction = p.advance().value as 'in' | 'out';
-  if (p.at('item') || p.at('ref')) p.advance();
+  if (p.at('item') || p.at('attribute') || p.at('ref')) p.advance();
   const name = p.advance().value;
   let type: string | undefined;
   let typeKind: TypeRelation | undefined;
@@ -989,7 +1053,8 @@ function parseRequirementSubject(p: ParserState): RequirementSubjectNode {
   p.expect('subject');
   const name = p.advance().value;
   let type: string | undefined;
-  if (p.at(':>') || p.at(':')) {
+  // `subject s : T;`, `subject s :> base;` or `subject s :>> base : T;` — keep the last type named.
+  while (p.at(':>>') || p.at(':>') || p.at(':')) {
     p.advance();
     type = parseQualifiedName(p);
   }
@@ -1071,6 +1136,80 @@ function parseTopLevelRequirementUsage(p: ParserState): RequirementDefNode {
     p.advance();
   }
   return def;
+}
+
+/** `verification def Name [:> Super] { subject s : T; objective [name] { verify req; ... } }` — valid SysML v2 verification. */
+function parseVerificationDef(p: ParserState, traceability: TraceabilityNode[]): VerificationDefNode {
+  p.expect('verification');
+  p.expect('def');
+  const name = p.advance().value;
+  let superType: string | undefined;
+  if (p.at(':>') || p.at(':')) {
+    p.advance();
+    superType = parseQualifiedName(p);
+  }
+  const def: VerificationDefNode = { kind: 'verificationDef', name, superType, verifies: [] };
+  if (!p.at('{')) {
+    if (p.at(';')) p.advance();
+    return def;
+  }
+  p.advance(); // '{'
+  for (;;) {
+    const doc = skipDocAndComments(p);
+    if (doc && !def.doc) def.doc = doc;
+    if (p.at('}')) {
+      p.advance();
+      break;
+    }
+    if (p.eof()) break;
+    if (p.at('subject')) {
+      def.subject = parseRequirementSubject(p);
+      continue;
+    }
+    if (p.at('objective')) {
+      p.advance();
+      if (p.atIdent()) p.advance();
+      if (!p.at('{')) continue;
+      p.advance();
+      for (;;) {
+        skipDocAndComments(p);
+        if (p.at('}')) {
+          p.advance();
+          break;
+        }
+        if (p.eof()) break;
+        if (p.at('verify')) {
+          p.advance();
+          if (p.at('requirement')) p.advance();
+          const req = parseFeaturePath(p);
+          // `verify requirement r : R;` declares a usage; the verified name is `r`. Skip any trailing type/body.
+          while (!p.eof() && !p.at(';') && !p.at('}')) p.advance();
+          if (p.at(';')) p.advance();
+          def.verifies.push(req);
+          traceability.push({ kind: 'verify', source: req, target: name });
+          continue;
+        }
+        skipUnknownMember(p);
+      }
+      continue;
+    }
+    skipUnknownMember(p);
+  }
+  return def;
+}
+
+/** `dependency [name] from a [, b] to c [, d];` — SysML v2's plain (non-semantic) relationship; used for traceability. */
+function parseDependency(p: ParserState): TraceabilityNode[] {
+  p.expect('dependency');
+  if (p.atIdent() && !p.at('from') && p.peek(1).value === 'from') p.advance(); // optional name
+  if (p.at('from')) p.advance();
+  const sources = [parseFeaturePath(p)];
+  while (p.at(',')) { p.advance(); sources.push(parseFeaturePath(p)); }
+  p.expect('to');
+  const targets = [parseFeaturePath(p)];
+  while (p.at(',')) { p.advance(); targets.push(parseFeaturePath(p)); }
+  if (p.at(';')) p.advance();
+  return sources.flatMap((source) => targets.map((target) => ({ kind: 'dependency' as const, source, target })));
 }
 
 /** `satisfy <req> by <target>;` / `verify <req> by <target>;` — the same shape, differing only in keyword. */
@@ -1699,6 +1838,8 @@ function parseTopLevelActionUsage(p: ParserState): ActionDefNode | undefined {
 
 interface ParseContext {
   packageName?: string;
+  /** Body-less top-level part usages, kept aside until we know whether a traceability statement references them. */
+  bodylessParts: PartDefNode[];
 }
 
 function parseMembers(
@@ -1777,7 +1918,7 @@ function parseMembers(
       continue;
     }
     if (p.at('part') && p.peek(1).value !== 'def') {
-      const usage = parseTopLevelPartUsage(p);
+      const usage = parseTopLevelPartUsage(p, ctx.bodylessParts);
       if (usage) definitions.push(usage);
       continue;
     }
@@ -1795,6 +1936,14 @@ function parseMembers(
     }
     if (p.at('requirement') && p.peek(1).value !== 'def') {
       definitions.push(parseTopLevelRequirementUsage(p));
+      continue;
+    }
+    if (p.at('verification') && p.peek(1).value === 'def') {
+      definitions.push(parseVerificationDef(p, traceability));
+      continue;
+    }
+    if (p.at('dependency')) {
+      traceability.push(...parseDependency(p));
       continue;
     }
     if (p.at('satisfy')) {
@@ -1824,7 +1973,8 @@ function parseMembers(
 /** Strips the leading `sysml-v2` diagram-type line mermaid keeps in the source text. */
 function stripDiagramHeader(text: string): string {
   const newlineIndex = text.indexOf('\n');
-  if (newlineIndex === -1) return '';
+  // No newline: the text is a single line, which is only the header if it IS the header — otherwise it is the model itself.
+  if (newlineIndex === -1) return /^\s*sysml-v2\s*$/i.test(text) ? '' : text;
   const firstLine = text.slice(0, newlineIndex);
   return /^\s*sysml-v2\s*$/i.test(firstLine) ? text.slice(newlineIndex + 1) : text;
 }
@@ -1833,7 +1983,12 @@ export function parseSysml(text: string): SysmlModel {
   const p = new ParserState(tokenize(stripDiagramHeader(text)));
   const definitions: DefinitionNode[] = [];
   const traceability: TraceabilityNode[] = [];
-  const ctx: ParseContext = {};
+  const ctx: ParseContext = { bodylessParts: [] };
   const doc = parseMembers(p, definitions, traceability, ctx);
+  const lastSegment = (path: string): string => path.replace(/::/g, '.').split('.').pop() ?? path;
+  const referenced = new Set(traceability.flatMap((t) => [lastSegment(t.source), lastSegment(t.target)]));
+  for (const usage of ctx.bodylessParts) {
+    if (referenced.has(usage.name) && !definitions.some((d) => d.name === usage.name)) definitions.push(usage);
+  }
   return { packageName: ctx.packageName, doc, definitions, traceability };
 }

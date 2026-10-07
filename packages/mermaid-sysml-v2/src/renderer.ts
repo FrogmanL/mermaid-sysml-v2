@@ -3,12 +3,14 @@ import type { Selection } from 'd3';
 import { log, getConfig, setupGraphViewbox } from './mermaidUtils.js';
 import { getModel, getAccTitle, getAccDescription } from './db.js';
 import type {
+  AttributeNode,
   ActionDefNode,
   ActionUsageNode,
   ConnectorNode,
   DefinitionNode,
   MessageNode,
   PartUsageNode,
+  NestedItemNode,
   SendUsage,
   TraceabilityNode,
   TypeRelation,
@@ -33,6 +35,9 @@ const CORNER_RADIUS = 8;
 // Container (containment + connectors) layout constants.
 const CHILD_PAD = 8;
 const CHILD_HEADER_H = 20;
+const ITEM_LINE_H = 14;
+const ITEM_FONT = 10.5;
+const ITEM_INDENT = 12;
 const CHILD_MIN_WIDTH = 90;
 const PORT_SIZE = 10;
 const PORT_LABEL_H = 12;
@@ -91,6 +96,12 @@ function estimateTextWidth(text: string, fontSize: number, bold = false): number
  */
 function typeSuffix(type: string | undefined, typeKind: TypeRelation | undefined): string {
   return type ? ` ${typeKind ?? ':'} ${type}` : '';
+}
+
+/** An attribute/item line: `name = value`, or `name : Type [mult]`. */
+function attributeLabel(a: AttributeNode): string {
+  if (a.value !== undefined) return `${a.name} = ${a.value}`;
+  return `${a.name}${typeSuffix(a.type, a.typeKind)}${a.multiplicity !== undefined ? ` [${a.multiplicity}]` : ''}`;
 }
 
 /** A box's outer border: sharp corners for a `def` (per spec), rounded for a usage. */
@@ -174,7 +185,7 @@ function toLeafBox(def: DefinitionNode): LeafBox {
       compartments.push({
         label: 'attributes',
         lines: def.attributes.map((a) =>
-          a.value !== undefined ? `${a.name} = ${a.value}` : `${a.name}${typeSuffix(a.type, a.typeKind)}`
+          attributeLabel(a)
         ),
       });
     }
@@ -215,7 +226,7 @@ function toLeafBox(def: DefinitionNode): LeafBox {
       compartments.push({
         label: 'attributes',
         lines: def.attributes.map((a) =>
-          a.value !== undefined ? `${a.name} = ${a.value}` : `${a.name}${typeSuffix(a.type, a.typeKind)}`
+          attributeLabel(a)
         ),
       });
     }
@@ -252,7 +263,7 @@ function toLeafBox(def: DefinitionNode): LeafBox {
       compartments.push({
         label: 'attributes',
         lines: def.attributes.map((a) =>
-          a.value !== undefined ? `${a.name} = ${a.value}` : `${a.name}${typeSuffix(a.type, a.typeKind)}`
+          attributeLabel(a)
         ),
       });
     }
@@ -264,7 +275,7 @@ function toLeafBox(def: DefinitionNode): LeafBox {
       compartments.push({
         label: 'attributes',
         lines: def.attributes.map((a) =>
-          a.value !== undefined ? `${a.name} = ${a.value}` : `${a.name}${typeSuffix(a.type, a.typeKind)}`
+          attributeLabel(a)
         ),
       });
     }
@@ -300,6 +311,14 @@ function toLeafBox(def: DefinitionNode): LeafBox {
       doc,
       compartments,
     };
+  }
+  if (def.kind === 'verificationDef') {
+    const compartments: RenderCompartment[] = [];
+    if (def.subject) {
+      compartments.push({ label: 'subject', lines: [`${def.subject.name}${typeSuffix(def.subject.type, undefined)}`] });
+    }
+    if (def.verifies.length) compartments.push({ label: 'verifies', lines: def.verifies });
+    return { stereotype: 'verification def', name: def.name, rounded: false, doc: def.doc, compartments };
   }
   if (def.kind === 'occurrenceDef') {
     // Used only when there's nothing to draw as a Sequence View (see
@@ -542,6 +561,21 @@ interface ContainerChildInput {
   type?: string;
   typeKind?: TypeRelation;
   ports: string[];
+  items?: NestedItemNode[];
+}
+
+interface ItemLine {
+  text: string;
+  depth: number;
+  /** Chain of `ref` names from the child's top-level item down to this line, used to resolve a dependency path (`[]` entries are unnamed). */
+  path: string[];
+}
+
+function flattenItems(items: NestedItemNode[] | undefined, depth = 0, parent: string[] = []): ItemLine[] {
+  return (items ?? []).flatMap((n) => {
+    const path = [...parent, n.ref ?? ''];
+    return [{ text: n.label, depth, path }, ...flattenItems(n.children, depth + 1, path)];
+  });
 }
 
 interface ChildPort {
@@ -557,13 +591,16 @@ interface ChildLayout {
   width: number;
   height: number;
   ports: ChildPort[];
+  itemLines: ItemLine[];
 }
+
+const DEPENDENCY_GAP = 90;
 
 function childLabel(name: string, type?: string, typeKind?: TypeRelation): string {
   return `${name}${typeSuffix(type, typeKind)}`;
 }
 
-function measureChildren(children: ContainerChildInput[]): {
+function measureChildren(children: ContainerChildInput[], gap = CHILD_GAP): {
   layouts: ChildLayout[];
   contentWidth: number;
   maxHeight: number;
@@ -573,20 +610,22 @@ function measureChildren(children: ContainerChildInput[]): {
   let maxHeight = 0;
 
   for (const child of children) {
+    const itemLines = flattenItems(child.items);
     const labelWidth = estimateTextWidth(childLabel(child.name, child.type, child.typeKind), 12, true) + CHILD_PAD * 2;
     const portsWidth = child.ports.length * PORT_SLOT_W;
-    const width = Math.max(CHILD_MIN_WIDTH, labelWidth, portsWidth);
-    const height = CHILD_HEADER_H + CHILD_PAD * 2;
+    const itemsWidth = Math.max(0, ...itemLines.map((l) => estimateTextWidth(l.text, ITEM_FONT) + ITEM_INDENT * (l.depth + 1) + CHILD_PAD * 2));
+    const width = Math.max(CHILD_MIN_WIDTH, labelWidth, portsWidth, itemsWidth);
+    const height = CHILD_HEADER_H + CHILD_PAD * 2 + (itemLines.length ? itemLines.length * ITEM_LINE_H + CHILD_PAD : 0);
     const ports: ChildPort[] = child.ports.map((name, i) => ({
       name,
       x: (width / (child.ports.length + 1)) * (i + 1),
     }));
-    layouts.push({ name: child.name, type: child.type, typeKind: child.typeKind, x, width, height, ports });
-    x += width + CHILD_GAP;
+    layouts.push({ name: child.name, type: child.type, typeKind: child.typeKind, x, width, height, ports, itemLines });
+    x += width + gap;
     maxHeight = Math.max(maxHeight, height);
   }
 
-  return { layouts, contentWidth: Math.max(0, x - CHILD_GAP), maxHeight };
+  return { layouts, contentWidth: Math.max(0, x - gap), maxHeight };
 }
 
 /**
@@ -624,6 +663,21 @@ function resolvePortPoint(
   return { x: child.x + port.x, y: childrenY + child.height, item };
 }
 
+/** Resolves a dotted `child.item.item...` path to the vertical center of that item's row inside the child's box (in container coordinates). */
+function resolveItemRow(
+  children: ChildLayout[],
+  path: string,
+  childrenY: number
+): { child: ChildLayout; y: number } | undefined {
+  const [childName, ...rest] = path.split('.');
+  const child = children.find((c) => c.name === childName);
+  if (!child || !rest.length) return undefined;
+  const index = child.itemLines.findIndex((l) => l.path.length === rest.length && l.path.every((seg, i) => seg === rest[i]));
+  if (index === -1) return undefined;
+  const dividerY = CHILD_HEADER_H + CHILD_PAD;
+  return { child, y: childrenY + dividerY + CHILD_PAD + ITEM_LINE_H * index + ITEM_FONT * 0.6 };
+}
+
 /** Prefers the conveyed item's name (matches spec's convention of labeling a wire with what flows over it) over a formal connector/flow name. */
 function connectorLabel(c: ConnectorNode, fromItem?: string, toItem?: string): string | undefined {
   if (fromItem && fromItem === toItem) return fromItem;
@@ -636,9 +690,11 @@ function prepareContainerBox(
   doc: string | undefined,
   rounded: boolean,
   children: ContainerChildInput[],
-  connectors: ConnectorNode[]
+  connectors: ConnectorNode[],
+  dependencies: { source: string; target: string }[] = []
 ): PreparedBox {
-  const { layouts, contentWidth, maxHeight } = measureChildren(children);
+  // Dependency arrows run through the gap between boxes, so leave room for them (and their label).
+  const { layouts, contentWidth, maxHeight } = measureChildren(children, dependencies.length ? DEPENDENCY_GAP : CHILD_GAP);
   const childrenY = PAD + STEREOTYPE_H + TITLE_H + PAD;
   const width = Math.max(
     MIN_WIDTH,
@@ -762,6 +818,25 @@ function prepareContainerBox(
         }
       }
 
+      // `dependency from a.x.y to b.p.q;` between two nested item rows (e.g. a repacked parameter depending on the one it came
+      // from): a dashed arrow from the client row's inner edge to the supplier row's, through the gap between the boxes.
+      dependencies.forEach((dep, i) => {
+        const from = resolveItemRow(layouts, dep.source, childrenY);
+        const to = resolveItemRow(layouts, dep.target, childrenY);
+        if (!from || !to || from.child === to.child) return;
+        const fromRight = from.child.x < to.child.x;
+        const fromX = fromRight ? from.child.x + from.child.width : from.child.x;
+        const toX = fromRight ? to.child.x : to.child.x + to.child.width;
+        drawDependencyArrow(
+          node,
+          { x: fromX, y: from.y, width: 0, height: 0 },
+          { x: toX, y: to.y, width: 0, height: 0 },
+          i === 0 ? '«dependency»' : '',
+          0,
+          0
+        );
+      });
+
       for (const child of layouts) {
         const childNode = node
           .append('g')
@@ -770,14 +845,29 @@ function prepareContainerBox(
 
         boxRect(childNode, 0, 0, child.width, child.height, true);
 
+        const hasItems = child.itemLines.length > 0;
         childNode
           .append('text')
           .attr('class', 'member')
           .attr('x', child.width / 2)
-          .attr('y', child.height / 2 + 4)
+          .attr('y', hasItems ? CHILD_PAD + 12 : child.height / 2 + 4)
           .attr('text-anchor', 'middle')
           .attr('font-size', '12px')
           .text(childLabel(child.name, child.type, child.typeKind));
+
+        if (hasItems) {
+          const dividerY = CHILD_HEADER_H + CHILD_PAD;
+          childNode.append('line').attr('class', 'divider').attr('x1', 0).attr('y1', dividerY).attr('x2', child.width).attr('y2', dividerY);
+          child.itemLines.forEach((line, i) => {
+            childNode
+              .append('text')
+              .attr('class', 'member item-line')
+              .attr('x', CHILD_PAD + ITEM_INDENT * line.depth)
+              .attr('y', dividerY + CHILD_PAD + ITEM_LINE_H * i + ITEM_FONT)
+              .attr('font-size', `${ITEM_FONT}px`)
+              .text((line.depth ? '└ ' : '') + line.text);
+          });
+        }
 
         for (const port of child.ports) {
           childNode
@@ -1667,9 +1757,9 @@ function toRenderList(definitions: DefinitionNode[]): RenderEntry[] {
         const children: ContainerChildInput[] = def.parts.map((usage) => {
           const childDef = usage.type ? byName.get(usage.type) : undefined;
           const ports = childDef && childDef.kind === 'partDef' ? childDef.ports.map((p) => p.name) : [];
-          return { name: usage.name, type: usage.type, typeKind: usage.typeKind, ports };
+          return { name: usage.name, type: usage.type, typeKind: usage.typeKind, ports, items: usage.items };
         });
-        return { box: prepareContainerBox(stereotype, displayName, def.doc, rounded, children, def.connectors), def };
+        return { box: prepareContainerBox(stereotype, displayName, def.doc, rounded, children, def.connectors, def.dependencies), def };
       }
       return { box: prepareTreeBox(stereotype, displayName, def.doc, rounded, def.parts, byName), def };
     }

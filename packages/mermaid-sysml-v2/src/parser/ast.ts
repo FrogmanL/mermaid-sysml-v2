@@ -24,6 +24,8 @@ export interface AttributeNode {
   /** Type reference after `:`, `:>`/`subsets`, or `:>>`/`redefines` (e.g. `ISQ::mass`). */
   type?: string;
   typeKind?: TypeRelation;
+  /** Raw text inside `[...]` (e.g. `1..*`, `8`), before or after the type. */
+  multiplicity?: string;
   /** Raw expression text after `=` (e.g. `engine.mass+transmission.mass`). */
   value?: string;
 }
@@ -41,6 +43,16 @@ export interface PartUsageNode {
   type?: string;
   typeKind?: TypeRelation;
   multiplicity?: string;
+  /** Item/port structure declared inside the usage's inline body (`item x : T { item y :> z; }`, `port :>> p { out item :>> q { ... } }`), as a tree of display labels. */
+  items?: NestedItemNode[];
+}
+
+/** One line of a nested item/port tree, pre-formatted for display (e.g. `out :>> video`, `param1 :> parameter`, `port :>> hdmiOut`). */
+export interface NestedItemNode {
+  label: string;
+  /** The feature name a path segment matches: its own name, else the feature it redefines/subsets (`out item :>> video` -> `video`). */
+  ref?: string;
+  children: NestedItemNode[];
 }
 
 /**
@@ -55,6 +67,8 @@ export interface PartUsageNode {
  */
 export interface ConnectorNode {
   name?: string;
+  /** `flow of <Type> from a to b;` — the payload type, when stated. */
+  itemType?: string;
   ends: string[];
 }
 
@@ -100,6 +114,11 @@ export interface PartDefNode {
   ports: PortRefNode[];
   parts: PartUsageNode[];
   connectors: ConnectorNode[];
+  /**
+   * `dependency [name] from a to b;` statements in this part's body, as dotted paths (`::` and `.` both accepted in source),
+   * e.g. a USB frame parameter depending on the HDMI parameter it repacks. Absent when there are none.
+   */
+  dependencies?: { source: string; target: string }[];
   /** `perform ...;` statements found in this part's body — see `PerformNode`. */
   performs: PerformNode[];
   /**
@@ -260,6 +279,21 @@ export interface UseCaseDefNode {
 }
 
 /**
+ * `verification def Name [:> Super] { subject s : T; objective { verify req; ... } }` — the
+ * standard SysML v2 way to say a requirement is verified (a `verify X by Y;` statement does not
+ * exist in the grammar). Each `verify` inside the objective becomes a `verify` TraceabilityNode
+ * (source: requirement, target: this definition), and the names are also listed in `verifies`.
+ */
+export interface VerificationDefNode {
+  kind: 'verificationDef';
+  name: string;
+  superType?: string;
+  doc?: string;
+  subject?: RequirementSubjectNode;
+  verifies: string[];
+}
+
+/**
  * `requirement def Name [:> Super] { doc ...; subject name [: Type]; }`, or
  * a bare `requirement name [: Type] [:> derivedFrom];` usage. SysML v2 has
  * no standalone `deriveReqt` keyword in the textual grammar — requirement
@@ -300,7 +334,7 @@ export interface RequirementDefNode {
  * usually won't.
  */
 export interface TraceabilityNode {
-  kind: 'satisfy' | 'verify' | 'trace' | 'allocate' | 'include';
+  kind: 'satisfy' | 'verify' | 'trace' | 'allocate' | 'include' | 'dependency';
   source: string;
   target: string;
 }
@@ -491,6 +525,7 @@ export type DefinitionNode =
   | ItemDefNode
   | EnumDefNode
   | UseCaseDefNode
+  | VerificationDefNode
   | ActionDefNode
   | OccurrenceDefNode;
 

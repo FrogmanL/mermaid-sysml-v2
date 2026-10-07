@@ -840,3 +840,45 @@ action takePicture : TakePicture {
     expect(node.querySelectorAll('line.succession-line').length).toBe(3);
   });
 });
+
+describe('nested items and verification (valid SysML v2)', () => {
+  it('draws nested item lines inside a container child and a verification def box', () => {
+    document.body.innerHTML = '';
+    db.clear();
+    db.parse(`part def Sys {
+  part dvd : DVDPlayer { port :>> hdmiOut { out item :>> video { item param1 :> parameter; } } }
+  part cap : Capture { port :>> hdmiIn; }
+  flow of Msg from dvd.hdmiOut.video to cap.hdmiIn.video;
+}
+part def DVDPlayer { port hdmiOut : HDMI; }
+part def Capture { port hdmiIn : ~HDMI; }
+verification def T { subject u : DVDPlayer; objective { verify r1; } }
+requirement r1 : R;`);
+    select(document.body).append('svg').attr('id', 'nested');
+    expect(() => draw('', 'nested', '0.0.0')).not.toThrow();
+    const lines = Array.from(document.querySelectorAll('#nested .item-line')).map((n) => n.textContent);
+    expect(lines).toEqual(['port :>> hdmiOut', '└ out :>> video', '└ param1 :> parameter']);
+    expect(document.querySelector('#nested')?.textContent).toContain('verification def');
+    expect(document.querySelector('#nested')?.textContent).toContain('«verify»');
+  });
+});
+
+describe('dependencies between nested item rows', () => {
+  it('draws one dashed arrow per `dependency` between items in different container children, and ignores unresolved paths', () => {
+    document.body.innerHTML = '';
+    db.clear();
+    db.parse(`part def Sys {
+  part dvd : DVDPlayer { port :>> hdmiOut { out item :>> video { item p1 :> parameter; item p2 :> parameter; } } }
+  part cap : Capture { port :>> usbOut { out item :>> data { item f1 :> frame { item p1 :> parameter; item p2 :> parameter; } } } }
+  flow from dvd.hdmiOut.video to cap.hdmiIn.video;
+  dependency from cap::usbOut::data::f1::p1 to dvd::hdmiOut::video::p1;
+  dependency from cap::usbOut::data::f1::p2 to dvd::hdmiOut::video::p2;
+  dependency from cap::usbOut::data::nope to dvd::hdmiOut::video::p2;
+}
+part def DVDPlayer { port hdmiOut : HDMI; }
+part def Capture { port hdmiIn : ~HDMI; }`);
+    select(document.body).append('svg').attr('id', 'deps');
+    expect(() => draw('', 'deps', '0.0.0')).not.toThrow();
+    expect(document.querySelectorAll('#deps .dependency-line')).toHaveLength(2);
+  });
+});

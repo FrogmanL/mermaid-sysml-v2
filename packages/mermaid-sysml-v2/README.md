@@ -695,6 +695,18 @@ Natural next steps, roughly in order of value:
 10. Publishing to npm and registering in Mermaid's
     [community integrations list](https://mermaid.js.org/ecosystem/integrations-community.html),
     and linking this project from the GitHub issue, once it's further along.
+11. **State machines** — `state def` / `state` usages (entry/do/exit, `transition ... first ... accept ... then ...`) are
+    skipped today; `examples/bvm.mmd`'s `ControlUnitStateMachine` is the motivating real-world case. A new diagram
+    type (rounded states, initial/final nodes, labelled transitions). For breadth, probably the largest visible gap.
+12. **`event occurrence`** in the Sequence View — the markers in `examples/features/15-sequence-view.mmd` (e.g.
+    `event occurrence setSpeedSent;` plus the `then event occurrence ...` ordering) are skipped, so lifelines show no
+    execution/event markers.
+13. **`view` usages** (`view x : StandardViewDefinitions;`, as in `bvm.mmd`) — skipped; decide whether to draw them or just
+    label which view a diagram corresponds to.
+
+Items 11–13 were found by logging every member the parser skips across all examples (all examples also pass the OMG Pilot
+Implementation validator — see `tools/sysml-validate`). Item 2 above covers the `first start; then ...; done;` skips in the
+use case example.
 
 ## License
 
