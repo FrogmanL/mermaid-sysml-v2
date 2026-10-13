@@ -59,6 +59,24 @@
           "when": "editorLangId == sysml || resourceExtname == .sysml"
         }
       ]
+    },
+    "configuration": {
+      "title": "SysML v2 Preview",
+      "properties": {
+        "sysml-v2.itemLayout": {
+          "type": "string",
+          "enum": [
+            "tree",
+            "containment"
+          ],
+          "enumDescriptions": [
+            "Draw a part's nested payload items as an indented text tree (one line per item).",
+            "Draw each nested payload item as a box nested inside its parent's box (boxes-in-boxes)."
+          ],
+          "default": "tree",
+          "markdownDescription": "How nested payload items inside a part are drawn in the diagram. The underlying SysML model is unchanged; this only affects rendering."
+        }
+      }
     }
   },
   "scripts": {

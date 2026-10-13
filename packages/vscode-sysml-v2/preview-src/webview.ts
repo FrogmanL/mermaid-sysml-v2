@@ -1,8 +1,8 @@
-import { renderSysmlInto } from './render.js';
+import { renderSysmlInto, type ItemLayout } from './render.js';
 
-/** Entry point for the standalone `.sysml` preview panel (see `src/sysmlPreview.ts`): the extension host posts `{ type: 'update', text }` whenever the document changes, and this re-renders the whole model into `#root`. */
+/** Entry point for the standalone `.sysml` preview panel (see `src/sysmlPreview.ts`): the extension host posts `{ type: 'update', text, itemLayout }` whenever the document (or the `sysml-v2.itemLayout` setting) changes, and this re-renders the whole model into `#root`. */
 const root = document.getElementById('root')!;
-let pending: string | undefined;
+let pending: { text: string; itemLayout: ItemLayout } | undefined;
 let rendering = false;
 
 async function drain(): Promise<void> {
@@ -10,20 +10,23 @@ async function drain(): Promise<void> {
   rendering = true;
   try {
     while (pending !== undefined) {
-      const text = pending;
+      const { text, itemLayout } = pending;
       pending = undefined;
-      await renderSysmlInto(root, text);
+      await renderSysmlInto(root, text, { itemLayout });
     }
   } finally {
     rendering = false;
   }
 }
 
-window.addEventListener('message', (event: MessageEvent<{ type?: string; text?: string }>) => {
-  if (event.data?.type !== 'update' || typeof event.data.text !== 'string') return;
-  pending = event.data.text;
-  void drain();
-});
+window.addEventListener(
+  'message',
+  (event: MessageEvent<{ type?: string; text?: string; itemLayout?: ItemLayout }>) => {
+    if (event.data?.type !== 'update' || typeof event.data.text !== 'string') return;
+    pending = { text: event.data.text, itemLayout: event.data.itemLayout === 'containment' ? 'containment' : 'tree' };
+    void drain();
+  }
+);
 
 acquireVsCodeApi().postMessage({ type: 'ready' });
 

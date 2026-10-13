@@ -3,6 +3,11 @@ import * as vscode from 'vscode';
 /** One live preview panel per `.sysml` document, keyed by URI. */
 const panels = new Map<string, vscode.WebviewPanel>();
 
+/** The configured nested-item layout (`sysml-v2.itemLayout`), defaulting to `'tree'`. */
+function getItemLayout(): 'tree' | 'containment' {
+  return vscode.workspace.getConfiguration('sysml-v2').get('itemLayout') === 'containment' ? 'containment' : 'tree';
+}
+
 /** Builds the panel's HTML. Exported for unit testing — it has no dependency on the `vscode` runtime beyond the plain strings passed in. */
 export function getPreviewHtml(options: { cspSource: string; scriptUri: string; nonce: string; title: string }): string {
   const { cspSource, scriptUri, nonce, title } = options;
@@ -63,7 +68,8 @@ export function openSysmlPreview(context: vscode.ExtensionContext, document: vsc
     title: fileName,
   });
 
-  const send = () => void panel.webview.postMessage({ type: 'update', text: document.getText() });
+  const send = () =>
+    void panel.webview.postMessage({ type: 'update', text: document.getText(), itemLayout: getItemLayout() });
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   const subscriptions: vscode.Disposable[] = [
@@ -75,6 +81,10 @@ export function openSysmlPreview(context: vscode.ExtensionContext, document: vsc
       if (event.document.uri.toString() !== key) return;
       clearTimeout(timer);
       timer = setTimeout(send, 250);
+    }),
+    // Re-render when the item-layout setting changes, so the toggle is live.
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration('sysml-v2.itemLayout')) send();
     }),
   ];
 

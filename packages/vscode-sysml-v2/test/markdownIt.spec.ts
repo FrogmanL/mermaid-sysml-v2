@@ -35,4 +35,16 @@ describe('extendMarkdownItWithSysmlV2', () => {
     const html = md.render('```sysml-v2\nsysml-v2\n// guard: x < 5 && y > 0\n```\n');
     expect(html).toContain('x &lt; 5 &amp;&amp; y &gt; 0');
   });
+
+  it("defaults the item-layout data attribute to 'tree'", () => {
+    const md = extendMarkdownItWithSysmlV2(new MarkdownIt());
+    const html = md.render('```sysml-v2\npart def Vehicle;\n```\n');
+    expect(html).toContain('data-item-layout="tree"');
+  });
+
+  it('carries the configured item layout into the container as a data attribute', () => {
+    const md = extendMarkdownItWithSysmlV2(new MarkdownIt(), () => 'containment');
+    const html = md.render('```sysml-v2\npart def Vehicle;\n```\n');
+    expect(html).toContain('data-item-layout="containment"');
+  });
 });

@@ -1,5 +1,5 @@
 import { sysmlV2DiagramClassName } from '../src/markdownIt.js';
-import { renderSysmlInto } from './render.js';
+import { renderSysmlInto, type ItemLayout } from './render.js';
 
 /**
  * Finds every unrendered `.sysml-v2-diagram` container (see `markdownIt.ts`)
@@ -18,7 +18,8 @@ async function renderAll(): Promise<void> {
     container.dataset.sysmlV2Rendered = 'true';
     const source = (container.textContent ?? '').trim();
     if (!source) continue;
-    await renderSysmlInto(container, source);
+    const itemLayout: ItemLayout = container.dataset.itemLayout === 'containment' ? 'containment' : 'tree';
+    await renderSysmlInto(container, source, { itemLayout });
   }
 }
 

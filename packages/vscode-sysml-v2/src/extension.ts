@@ -32,7 +32,9 @@ export function activate(context: vscode.ExtensionContext): {
   );
   return {
     extendMarkdownIt(md: MarkdownIt) {
-      return extendMarkdownItWithSysmlV2(md);
+      return extendMarkdownItWithSysmlV2(md, () =>
+        vscode.workspace.getConfiguration('sysml-v2').get('itemLayout', 'tree')
+      );
     },
   };
 }

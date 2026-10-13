@@ -23,11 +23,20 @@ export const sysmlV2DiagramClassName = 'sysml-v2-diagram';
  * through when its own language doesn't match) instead of clobbering the
  * chain.
  */
-export function extendMarkdownItWithSysmlV2(md: MarkdownIt): MarkdownIt {
+export function extendMarkdownItWithSysmlV2(
+  md: MarkdownIt,
+  getItemLayout: () => string = () => 'tree'
+): MarkdownIt {
   const highlight = md.options.highlight;
   md.options.highlight = (code: string, lang: string, attrs: string): string => {
     if (lang?.trim().toLowerCase() === sysmlV2LanguageId) {
-      return `<pre class="${sysmlV2DiagramClassName}" style="all: unset;">${escapeHtml(code)}</pre>`;
+      // The current `sysml-v2.itemLayout` setting is read here (extension-host
+      // side) and carried into the preview DOM as a data attribute, since the
+      // preview script (`preview-src/index.ts`) can't read workspace settings
+      // itself. VS Code re-renders markdown when the setting changes, so the
+      // attribute stays current.
+      const itemLayout = getItemLayout() === 'containment' ? 'containment' : 'tree';
+      return `<pre class="${sysmlV2DiagramClassName}" data-item-layout="${itemLayout}" style="all: unset;">${escapeHtml(code)}</pre>`;
     }
     return highlight?.(code, lang, attrs) ?? escapeHtml(code);
   };
