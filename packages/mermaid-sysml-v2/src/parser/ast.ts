@@ -52,6 +52,8 @@ export interface NestedItemNode {
   label: string;
   /** The feature name a path segment matches: its own name, else the feature it redefines/subsets (`out item :>> video` -> `video`). */
   ref?: string;
+  /** True for a `port ...` node (as opposed to an `item ...`). A port is only ever a port — it can't visually contain anything — so the boxes-in-boxes "containment" renderer skips a port and its nested payload (see the renderer's `ItemLayout`); the text-tree renderer still lists it. */
+  isPort?: boolean;
   children: NestedItemNode[];
 }
 
@@ -119,6 +121,17 @@ export interface PartDefNode {
    * e.g. a USB frame parameter depending on the HDMI parameter it repacks. Absent when there are none.
    */
   dependencies?: { source: string; target: string }[];
+  /**
+   * `bind [name] lhs = rhs;` binding connectors in this part's body, as dotted
+   * paths (`::` and `.` both accepted in source). The "payload bound to port"
+   * convention uses these to bind a sibling item to a port's payload feature
+   * (e.g. `bind video = hdmiOut.video`), so the item's nested structure can be
+   * drawn outside the port while still asserting it *is* the port's payload.
+   * Captured so the construct isn't silently dropped; the intra-part tether is
+   * not yet drawn as its own edge (the renderer skips same-child tethers — see
+   * `16-nested-items-bound-to-port.sysml`). Absent when there are none.
+   */
+  bindings?: { source: string; target: string }[];
   /** `perform ...;` statements found in this part's body — see `PerformNode`. */
   performs: PerformNode[];
   /**

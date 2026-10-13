@@ -48,6 +48,47 @@ const CONNECTOR_BASE_DROOP = 18;
 const CONNECTOR_FAN_STEP = 16;
 const ARROW_SIZE = 5;
 
+// Nested-item "containment" layout constants (boxes-in-boxes; the alternative
+// to the default `└`-indented text tree — see `ItemLayout`).
+const ITEM_BOX_MIN_WIDTH = 70;
+const ITEM_BOX_HEADER_H = 15;
+const ITEM_BOX_PAD = 5;
+const ITEM_BOX_GAP = 5;
+// Item-to-item dependency routing (containment layout).
+const ITEM_DEP_ARROW_LEN = 7;
+const ITEM_DEP_ARROW_WIDTH = 6;
+const ITEM_DEP_DOT_R = 2.4;
+const ITEM_DEP_LANE_STEP = 10;
+
+/**
+ * How a child part's nested payload items are drawn inside its box:
+ *  - `'tree'` (default): an indented `└ ...` text list (one line per item).
+ *  - `'containment'`: each item as its own box nested inside its parent's
+ *    box (boxes-in-boxes). Same data either way; see README / the demo's
+ *    view toggle and the extension's `sysml-v2.itemLayout` setting.
+ */
+export type ItemLayout = 'tree' | 'containment';
+
+/** Joins a ref-name chain into a stable map key (NUL can't appear in a name). */
+function itemPathKey(path: string[]): string {
+  return path.join('\u0001');
+}
+
+/** A box rectangle (structurally a `Rect`; declared here because `Rect` is defined later in the file). */
+type ItemRect = { x: number; y: number; width: number; height: number };
+
+/**
+ * The nested items drawable as containment boxes: everything except a `port`
+ * and its payload. A port is only ever a port — in UML/SysML it can't visually
+ * contain anything — so its nested payload isn't drawn in containment layout
+ * (that's exactly why the "payload bound to port" modeling convention exists:
+ * it re-homes the payload onto a part-level item that *can* be a box). The
+ * text-tree layout still lists ports, since text can represent what a box can't.
+ */
+function drawableItems(items: NestedItemNode[] | undefined): NestedItemNode[] {
+  return (items ?? []).filter((n) => !n.isPort);
+}
+
 // Composition-tree layout constants (containment with no connectors).
 const TREE_CHILD_GAP = 24;
 const TREE_DIAMOND = 6;
@@ -583,6 +624,149 @@ interface ChildPort {
   x: number;
 }
 
+/** A nested item drawn as a box (containment layout); `children` nest inside it. */
+interface ItemBoxLayout {
+  label: string;
+  ref?: string;
+  width: number;
+  height: number;
+  children: ItemBoxLayout[];
+}
+
+/** Measures one nested item (and its descendants) as a box whose width fits its own label and its widest child, and whose height stacks its children below the header. Port descendants are dropped (a port can't be a containing box — see `drawableItems`). */
+function measureItemBox(n: NestedItemNode): ItemBoxLayout {
+  const children = drawableItems(n.children).map(measureItemBox);
+  const labelWidth = estimateTextWidth(n.label, ITEM_FONT) + ITEM_BOX_PAD * 2;
+  const innerWidth = children.length ? Math.max(...children.map((c) => c.width)) : 0;
+  const width = Math.max(ITEM_BOX_MIN_WIDTH, labelWidth, innerWidth + ITEM_BOX_PAD * 2);
+  const childrenHeight = children.length
+    ? ITEM_BOX_PAD +
+      children.reduce((sum, c) => sum + c.height, 0) +
+      (children.length - 1) * ITEM_BOX_GAP +
+      ITEM_BOX_PAD
+    : 0;
+  return { label: n.label, ref: n.ref, width, height: ITEM_BOX_HEADER_H + childrenHeight, children };
+}
+
+/** Draws an item box (and recursively its children) at `(x, y)`, stretched to `width` so siblings align; children are inset by `ITEM_BOX_PAD`. */
+function drawItemBox(node: G, layout: ItemBoxLayout, x: number, y: number, width: number): void {
+  const box = node.append('g').attr('transform', `translate(${x},${y})`);
+  box
+    .append('rect')
+    .attr('class', 'item-box')
+    .attr('x', 0)
+    .attr('y', 0)
+    .attr('width', width)
+    .attr('height', layout.height)
+    .attr('rx', 3)
+    .attr('ry', 3);
+  box
+    .append('text')
+    .attr('class', 'member item-box-label')
+    .attr('x', ITEM_BOX_PAD)
+    .attr('y', ITEM_BOX_HEADER_H * 0.72)
+    .attr('font-size', `${ITEM_FONT}px`)
+    .text(layout.label);
+  if (layout.children.length) {
+    const innerWidth = width - ITEM_BOX_PAD * 2;
+    let cy = ITEM_BOX_HEADER_H + ITEM_BOX_PAD;
+    for (const child of layout.children) {
+      drawItemBox(box, child, ITEM_BOX_PAD, cy, innerWidth);
+      cy += child.height + ITEM_BOX_GAP;
+    }
+  }
+}
+
+/**
+ * Records each box's ref-path → its rectangle (in child-box coordinates), so
+ * a dependency endpoint can resolve to the actual parameter box it names —
+ * letting the arrow connect to the parameter, not the whole part. `x`/`width`
+ * track the horizontal inset/stretch applied by `drawItemBox` so the rect
+ * matches what's drawn. (In tree layout, the analogous anchor is the full
+ * child-box edge at the text row — see `measureChildren`.)
+ */
+function collectItemBoxAnchors(
+  boxes: ItemBoxLayout[],
+  rect: { x: number; y: number; width: number },
+  parentPath: string[],
+  out: Map<string, ItemRect>
+): void {
+  let cy = rect.y;
+  for (const b of boxes) {
+    const path = [...parentPath, b.ref ?? ''];
+    out.set(itemPathKey(path), { x: rect.x, y: cy, width: rect.width, height: b.height });
+    if (b.children.length) {
+      collectItemBoxAnchors(
+        b.children,
+        { x: rect.x + ITEM_BOX_PAD, y: cy + ITEM_BOX_HEADER_H + ITEM_BOX_PAD, width: rect.width - ITEM_BOX_PAD * 2 },
+        path,
+        out
+      );
+    }
+    cy += b.height + ITEM_BOX_GAP;
+  }
+}
+
+/**
+ * Draws a `dependency` between two nested item boxes so it reads as
+ * parameter-to-parameter, not part-to-part: it leaves the source box from the
+ * side facing the target, runs vertically through the gap between the two
+ * parts (offset per `lane` so sibling dependencies fan out instead of stacking
+ * on one line), and enters the target box — a dot marks the source parameter,
+ * an arrowhead the target. Used only in containment layout, where each
+ * parameter has a box of its own; tree layout keeps `drawDependencyArrow`,
+ * which can only anchor at the part's own edge.
+ */
+function drawItemDependency(
+  node: G,
+  fromRect: ItemRect,
+  toRect: ItemRect,
+  label: string,
+  lane: number
+): void {
+  const fromCx = fromRect.x + fromRect.width / 2;
+  const toCx = toRect.x + toRect.width / 2;
+  const sourceOnRight = fromCx > toCx;
+  const sx = sourceOnRight ? fromRect.x : fromRect.x + fromRect.width;
+  const sy = fromRect.y + fromRect.height / 2;
+  const tx = sourceOnRight ? toRect.x + toRect.width : toRect.x;
+  const ty = toRect.y + toRect.height / 2;
+  const midX = (sx + tx) / 2 + lane * ITEM_DEP_LANE_STEP;
+
+  node
+    .append('path')
+    .attr('class', 'dependency-line')
+    .attr('fill', 'none')
+    .attr('d', `M ${sx},${sy} L ${midX},${sy} L ${midX},${ty} L ${tx},${ty}`);
+
+  node
+    .append('circle')
+    .attr('class', 'dependency-source')
+    .attr('cx', sx)
+    .attr('cy', sy)
+    .attr('r', ITEM_DEP_DOT_R);
+
+  const dir = tx < midX ? -1 : 1; // points horizontally into the target box
+  node
+    .append('polyline')
+    .attr('class', 'dependency-arrowhead')
+    .attr(
+      'points',
+      `${tx - dir * ITEM_DEP_ARROW_LEN},${ty - ITEM_DEP_ARROW_WIDTH / 2} ${tx},${ty} ${tx - dir * ITEM_DEP_ARROW_LEN},${ty + ITEM_DEP_ARROW_WIDTH / 2}`
+    );
+
+  if (label) {
+    node
+      .append('text')
+      .attr('class', 'dependency-label')
+      .attr('x', midX)
+      .attr('y', (sy + ty) / 2 - 4)
+      .attr('text-anchor', 'middle')
+      .attr('font-size', '9px')
+      .text(label);
+  }
+}
+
 interface ChildLayout {
   name: string;
   type?: string;
@@ -592,6 +776,9 @@ interface ChildLayout {
   height: number;
   ports: ChildPort[];
   itemLines: ItemLine[];
+  itemBoxes: ItemBoxLayout[];
+  /** Ref-path key (see `itemPathKey`) → the rectangle a dependency endpoint anchors to, in child-box coordinates; built for whichever layout is active. */
+  itemAnchorRect: Map<string, ItemRect>;
 }
 
 const DEPENDENCY_GAP = 90;
@@ -600,7 +787,11 @@ function childLabel(name: string, type?: string, typeKind?: TypeRelation): strin
   return `${name}${typeSuffix(type, typeKind)}`;
 }
 
-function measureChildren(children: ContainerChildInput[], gap = CHILD_GAP): {
+function measureChildren(
+  children: ContainerChildInput[],
+  gap = CHILD_GAP,
+  itemLayout: ItemLayout = 'tree'
+): {
   layouts: ChildLayout[];
   contentWidth: number;
   maxHeight: number;
@@ -610,17 +801,73 @@ function measureChildren(children: ContainerChildInput[], gap = CHILD_GAP): {
   let maxHeight = 0;
 
   for (const child of children) {
-    const itemLines = flattenItems(child.items);
     const labelWidth = estimateTextWidth(childLabel(child.name, child.type, child.typeKind), 12, true) + CHILD_PAD * 2;
     const portsWidth = child.ports.length * PORT_SLOT_W;
-    const itemsWidth = Math.max(0, ...itemLines.map((l) => estimateTextWidth(l.text, ITEM_FONT) + ITEM_INDENT * (l.depth + 1) + CHILD_PAD * 2));
-    const width = Math.max(CHILD_MIN_WIDTH, labelWidth, portsWidth, itemsWidth);
-    const height = CHILD_HEADER_H + CHILD_PAD * 2 + (itemLines.length ? itemLines.length * ITEM_LINE_H + CHILD_PAD : 0);
+    // The items area starts just below the header divider — the same y in
+    // both layouts, so a dependency arrow lands in the right place either way.
+    const dividerY = CHILD_HEADER_H + CHILD_PAD;
+    const itemsStartY = dividerY + CHILD_PAD;
+    const itemAnchorRect = new Map<string, ItemRect>();
+
+    let itemLines: ItemLine[] = [];
+    let itemBoxes: ItemBoxLayout[] = [];
+    let width: number;
+    let height: number;
+
+    if (itemLayout === 'containment') {
+      // Ports can't contain, so a port's payload isn't drawn (see `drawableItems`).
+      itemBoxes = drawableItems(child.items).map(measureItemBox);
+      const itemsWidth = itemBoxes.length ? Math.max(...itemBoxes.map((b) => b.width)) + CHILD_PAD * 2 : 0;
+      width = Math.max(CHILD_MIN_WIDTH, labelWidth, portsWidth, itemsWidth);
+      const boxesHeight =
+        itemBoxes.reduce((sum, b) => sum + b.height, 0) + Math.max(0, itemBoxes.length - 1) * ITEM_BOX_GAP;
+      height = CHILD_HEADER_H + CHILD_PAD * 2 + (itemBoxes.length ? boxesHeight + CHILD_PAD : 0);
+      // Top-level boxes are inset by CHILD_PAD and stretched to the inner width
+      // (matching `drawItemBox`'s call site), so anchors line up with the draw.
+      collectItemBoxAnchors(
+        itemBoxes,
+        { x: CHILD_PAD, y: itemsStartY, width: width - CHILD_PAD * 2 },
+        [],
+        itemAnchorRect
+      );
+    } else {
+      itemLines = flattenItems(child.items);
+      const itemsWidth = Math.max(
+        0,
+        ...itemLines.map((l) => estimateTextWidth(l.text, ITEM_FONT) + ITEM_INDENT * (l.depth + 1) + CHILD_PAD * 2)
+      );
+      width = Math.max(CHILD_MIN_WIDTH, labelWidth, portsWidth, itemsWidth);
+      height = CHILD_HEADER_H + CHILD_PAD * 2 + (itemLines.length ? itemLines.length * ITEM_LINE_H + CHILD_PAD : 0);
+      // A text row has no box of its own, so a dependency anchors at the child's
+      // own edge (the full width) at the row's vertical center — the arrow
+      // points at the part, which is all tree layout can show.
+      itemLines.forEach((l, i) => {
+        const yCenter = ITEM_LINE_H * i + ITEM_FONT * 0.6;
+        itemAnchorRect.set(itemPathKey(l.path), {
+          x: 0,
+          y: itemsStartY + yCenter - ITEM_LINE_H / 2,
+          width,
+          height: ITEM_LINE_H,
+        });
+      });
+    }
+
     const ports: ChildPort[] = child.ports.map((name, i) => ({
       name,
       x: (width / (child.ports.length + 1)) * (i + 1),
     }));
-    layouts.push({ name: child.name, type: child.type, typeKind: child.typeKind, x, width, height, ports, itemLines });
+    layouts.push({
+      name: child.name,
+      type: child.type,
+      typeKind: child.typeKind,
+      x,
+      width,
+      height,
+      ports,
+      itemLines,
+      itemBoxes,
+      itemAnchorRect,
+    });
     x += width + gap;
     maxHeight = Math.max(maxHeight, height);
   }
@@ -663,19 +910,18 @@ function resolvePortPoint(
   return { x: child.x + port.x, y: childrenY + child.height, item };
 }
 
-/** Resolves a dotted `child.item.item...` path to the vertical center of that item's row inside the child's box (in container coordinates). */
+/** Resolves a dotted `child.item.item...` path to the rectangle a dependency endpoint anchors to (in container coordinates): the item's own box in containment layout, or the child's edge at its text row in tree layout. Returns `undefined` when the path names nothing drawn (e.g. a payload inside a port, which containment doesn't draw). */
 function resolveItemRow(
   children: ChildLayout[],
   path: string,
   childrenY: number
-): { child: ChildLayout; y: number } | undefined {
+): { child: ChildLayout; rect: ItemRect } | undefined {
   const [childName, ...rest] = path.split('.');
   const child = children.find((c) => c.name === childName);
   if (!child || !rest.length) return undefined;
-  const index = child.itemLines.findIndex((l) => l.path.length === rest.length && l.path.every((seg, i) => seg === rest[i]));
-  if (index === -1) return undefined;
-  const dividerY = CHILD_HEADER_H + CHILD_PAD;
-  return { child, y: childrenY + dividerY + CHILD_PAD + ITEM_LINE_H * index + ITEM_FONT * 0.6 };
+  const a = child.itemAnchorRect.get(itemPathKey(rest));
+  if (!a) return undefined;
+  return { child, rect: { x: child.x + a.x, y: childrenY + a.y, width: a.width, height: a.height } };
 }
 
 /** Prefers the conveyed item's name (matches spec's convention of labeling a wire with what flows over it) over a formal connector/flow name. */
@@ -691,10 +937,15 @@ function prepareContainerBox(
   rounded: boolean,
   children: ContainerChildInput[],
   connectors: ConnectorNode[],
-  dependencies: { source: string; target: string }[] = []
+  dependencies: { source: string; target: string }[] = [],
+  itemLayout: ItemLayout = 'tree'
 ): PreparedBox {
   // Dependency arrows run through the gap between boxes, so leave room for them (and their label).
-  const { layouts, contentWidth, maxHeight } = measureChildren(children, dependencies.length ? DEPENDENCY_GAP : CHILD_GAP);
+  const { layouts, contentWidth, maxHeight } = measureChildren(
+    children,
+    dependencies.length ? DEPENDENCY_GAP : CHILD_GAP,
+    itemLayout
+  );
   const childrenY = PAD + STEREOTYPE_H + TITLE_H + PAD;
   const width = Math.max(
     MIN_WIDTH,
@@ -818,25 +1069,6 @@ function prepareContainerBox(
         }
       }
 
-      // `dependency from a.x.y to b.p.q;` between two nested item rows (e.g. a repacked parameter depending on the one it came
-      // from): a dashed arrow from the client row's inner edge to the supplier row's, through the gap between the boxes.
-      dependencies.forEach((dep, i) => {
-        const from = resolveItemRow(layouts, dep.source, childrenY);
-        const to = resolveItemRow(layouts, dep.target, childrenY);
-        if (!from || !to || from.child === to.child) return;
-        const fromRight = from.child.x < to.child.x;
-        const fromX = fromRight ? from.child.x + from.child.width : from.child.x;
-        const toX = fromRight ? to.child.x : to.child.x + to.child.width;
-        drawDependencyArrow(
-          node,
-          { x: fromX, y: from.y, width: 0, height: 0 },
-          { x: toX, y: to.y, width: 0, height: 0 },
-          i === 0 ? '«dependency»' : '',
-          0,
-          0
-        );
-      });
-
       for (const child of layouts) {
         const childNode = node
           .append('g')
@@ -845,7 +1077,7 @@ function prepareContainerBox(
 
         boxRect(childNode, 0, 0, child.width, child.height, true);
 
-        const hasItems = child.itemLines.length > 0;
+        const hasItems = child.itemLines.length > 0 || child.itemBoxes.length > 0;
         childNode
           .append('text')
           .attr('class', 'member')
@@ -858,15 +1090,26 @@ function prepareContainerBox(
         if (hasItems) {
           const dividerY = CHILD_HEADER_H + CHILD_PAD;
           childNode.append('line').attr('class', 'divider').attr('x1', 0).attr('y1', dividerY).attr('x2', child.width).attr('y2', dividerY);
-          child.itemLines.forEach((line, i) => {
-            childNode
-              .append('text')
-              .attr('class', 'member item-line')
-              .attr('x', CHILD_PAD + ITEM_INDENT * line.depth)
-              .attr('y', dividerY + CHILD_PAD + ITEM_LINE_H * i + ITEM_FONT)
-              .attr('font-size', `${ITEM_FONT}px`)
-              .text((line.depth ? '└ ' : '') + line.text);
-          });
+          if (itemLayout === 'containment') {
+            // Each top-level item as a box, stretched to the child's inner
+            // width so they align; descendants nest inside (see `drawItemBox`).
+            const innerWidth = child.width - CHILD_PAD * 2;
+            let cy = dividerY + CHILD_PAD;
+            for (const b of child.itemBoxes) {
+              drawItemBox(childNode, b, CHILD_PAD, cy, innerWidth);
+              cy += b.height + ITEM_BOX_GAP;
+            }
+          } else {
+            child.itemLines.forEach((line, i) => {
+              childNode
+                .append('text')
+                .attr('class', 'member item-line')
+                .attr('x', CHILD_PAD + ITEM_INDENT * line.depth)
+                .attr('y', dividerY + CHILD_PAD + ITEM_LINE_H * i + ITEM_FONT)
+                .attr('font-size', `${ITEM_FONT}px`)
+                .text((line.depth ? '└ ' : '') + line.text);
+            });
+          }
         }
 
         for (const port of child.ports) {
@@ -888,6 +1131,29 @@ function prepareContainerBox(
             .text(port.name);
         }
       }
+
+      // `dependency from a.x.y to b.p.q;` between two nested items (e.g. a
+      // repacked parameter depending on the one it came from): a dashed arrow
+      // routed through the gap between the boxes. The endpoints are the actual
+      // item rectangles (`drawDependencyArrow`/`drawItemDependency` anchor to
+      // each box), so in containment layout the arrow connects to the parameter
+      // box itself — the true source/destination — not just the part's edge.
+      // Drawn LAST, after every child box, so the link paints *on top* and its
+      // whole path — out of the parameter, across the shapes enclosing it, and
+      // through the gap — stays visible rather than being hidden under them.
+      const resolvedDeps = dependencies
+        .map((dep) => ({ from: resolveItemRow(layouts, dep.source, childrenY), to: resolveItemRow(layouts, dep.target, childrenY) }))
+        .filter((d) => d.from && d.to && d.from.child !== d.to.child);
+      resolvedDeps.forEach((d, i) => {
+        const label = i === 0 ? '«dependency»' : '';
+        if (itemLayout === 'containment') {
+          // Fan the sibling dependencies' vertical runs so they don't stack on one line.
+          const lane = i - (resolvedDeps.length - 1) / 2;
+          drawItemDependency(node, d.from!.rect, d.to!.rect, label, lane);
+        } else {
+          drawDependencyArrow(node, d.from!.rect, d.to!.rect, label, 0, 0);
+        }
+      });
     },
   };
 }
@@ -1719,7 +1985,7 @@ interface RenderEntry {
   def: DefinitionNode;
 }
 
-function toRenderList(definitions: DefinitionNode[]): RenderEntry[] {
+function toRenderList(definitions: DefinitionNode[], itemLayout: ItemLayout = 'tree'): RenderEntry[] {
   const byName = new Map<string, DefinitionNode>();
   for (const def of definitions) byName.set(def.name, def);
 
@@ -1759,7 +2025,19 @@ function toRenderList(definitions: DefinitionNode[]): RenderEntry[] {
           const ports = childDef && childDef.kind === 'partDef' ? childDef.ports.map((p) => p.name) : [];
           return { name: usage.name, type: usage.type, typeKind: usage.typeKind, ports, items: usage.items };
         });
-        return { box: prepareContainerBox(stereotype, displayName, def.doc, rounded, children, def.connectors, def.dependencies), def };
+        return {
+          box: prepareContainerBox(
+            stereotype,
+            displayName,
+            def.doc,
+            rounded,
+            children,
+            def.connectors,
+            def.dependencies,
+            itemLayout
+          ),
+          def,
+        };
       }
       return { box: prepareTreeBox(stereotype, displayName, def.doc, rounded, def.parts, byName), def };
     }
@@ -2044,10 +2322,11 @@ export const draw = (_text: string, id: string, _version: string): void => {
     const model = getModel();
     const conf = getConfig() as {
       securityLevel?: string;
-      sysml?: { useMaxWidth?: boolean; wrapWidth?: number };
+      sysml?: { useMaxWidth?: boolean; wrapWidth?: number; itemLayout?: ItemLayout };
     };
     const useMaxWidth = conf.sysml?.useMaxWidth ?? true;
     const maxRowWidth = conf.sysml?.wrapWidth ?? 900;
+    const itemLayout: ItemLayout = conf.sysml?.itemLayout === 'containment' ? 'containment' : 'tree';
 
     // Handle root and Document for when rendering in sandbox mode, same as mermaid's own diagrams.
     let sandboxElement: Selection<HTMLIFrameElement, unknown, HTMLElement, unknown> | undefined;
@@ -2080,7 +2359,7 @@ export const draw = (_text: string, id: string, _version: string): void => {
       return;
     }
 
-    const positioned = layout(toRenderList(model.definitions), maxRowWidth);
+    const positioned = layout(toRenderList(model.definitions, itemLayout), maxRowWidth);
     for (const { box, x, y } of positioned) {
       const node = g.append('g').attr('class', 'node').attr('transform', `translate(${x},${y})`);
       if (box.doc) node.append('title').text(box.doc);

@@ -882,3 +882,84 @@ part def Capture { port hdmiIn : ~HDMI; }`);
     expect(document.querySelectorAll('#deps .dependency-line')).toHaveLength(2);
   });
 });
+
+describe('nested item containment layout (sysml.itemLayout)', () => {
+  // "Payload bound to port": the payload is a part-level `item` (which can be a
+  // box), tied to the port by a binding — so it is drawable as containment.
+  const boundModel = `part def Sys {
+  part dvd : DVDPlayer {
+    item video : HDMIMessage { item p1 :> parameter; item p2 :> parameter; }
+    bind video = hdmiOut.video;
+  }
+  part cap : Capture {
+    item data : USBMessage { item f1 :> frame { item p1 :> parameter; item p2 :> parameter; } }
+    bind data = usbOut.data;
+  }
+  flow from dvd.hdmiOut.video to cap.hdmiIn.video;
+  dependency from cap::data::f1::p1 to dvd::video::p1;
+}
+part def DVDPlayer { port hdmiOut : HDMI; }
+part def Capture { port hdmiIn : ~HDMI; }`;
+
+  // "Payload in port": the payload is nested *inside the port*. A port can't
+  // contain anything, so containment layout must not draw this structure.
+  const inPortModel = `part def Sys {
+  part dvd : DVDPlayer { port :>> hdmiOut { out item :>> video { item p1 :> parameter; item p2 :> parameter; } } }
+  part cap : Capture { port :>> usbOut { out item :>> data { item f1 :> frame { item p1 :> parameter; } } } }
+  flow from dvd.hdmiOut.video to cap.hdmiIn.video;
+  dependency from cap::usbOut::data::f1::p1 to dvd::hdmiOut::video::p1;
+}
+part def DVDPlayer { port hdmiOut : HDMI; }
+part def Capture { port hdmiIn : ~HDMI; }`;
+
+  function drawWith(itemLayout: string, source: string, id: string): void {
+    document.body.innerHTML = '';
+    db.clear();
+    injectUtils(
+      { trace: noop, debug: noop, info: noop, warn: noop, error: noop, fatal: noop },
+      noop,
+      () => ({ sysml: { itemLayout } }),
+      (s: string) => s,
+      vi.fn(),
+      () => ({})
+    );
+    db.parse(source);
+    select(document.body).append('svg').attr('id', id);
+    draw('', id, '0.0.0');
+  }
+
+  it("draws nested items as text lines in 'tree' layout (the default)", () => {
+    drawWith('tree', boundModel, 'il-tree');
+    expect(document.querySelectorAll('#il-tree .item-line').length).toBeGreaterThan(0);
+    expect(document.querySelectorAll('#il-tree rect.item-box')).toHaveLength(0);
+  });
+
+  it("draws each part-level nested item as a box in 'containment' layout, with no text-tree lines", () => {
+    drawWith('containment', boundModel, 'il-box');
+    // dvd: video, p1, p2 (3) + cap: data, f1, p1, p2 (4) = 7 boxes.
+    expect(document.querySelectorAll('#il-box rect.item-box')).toHaveLength(7);
+    expect(document.querySelectorAll('#il-box .item-line')).toHaveLength(0);
+  });
+
+  it('routes a dependency parameter-to-parameter in containment layout (source dot + arrowhead, not a part-edge line)', () => {
+    drawWith('containment', boundModel, 'il-dep');
+    // The containment router draws the dashed run as a <path> with a source
+    // dot on the parameter box — parameter-to-parameter, not part-to-part.
+    expect(document.querySelectorAll('#il-dep path.dependency-line')).toHaveLength(1);
+    expect(document.querySelectorAll('#il-dep circle.dependency-source')).toHaveLength(1);
+  });
+
+  it('still lists a payload-in-port as text in tree layout', () => {
+    drawWith('tree', inPortModel, 'il-port-tree');
+    const lines = Array.from(document.querySelectorAll('#il-port-tree .item-line')).map((n) => n.textContent);
+    expect(lines).toContain('port :>> hdmiOut');
+    expect(lines.some((l) => l?.includes('p1'))).toBe(true);
+  });
+
+  it("does not draw a payload nested inside a port in containment layout (a port can't contain)", () => {
+    drawWith('containment', inPortModel, 'il-port-box');
+    expect(document.querySelectorAll('#il-port-box rect.item-box')).toHaveLength(0);
+    // With nothing drawn to anchor to, the item-level dependency is dropped.
+    expect(document.querySelectorAll('#il-port-box .dependency-line')).toHaveLength(0);
+  });
+});

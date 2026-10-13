@@ -57,8 +57,14 @@
           <option value="features/13-decision-fork-join-loop.mmd">13: decide/merge/fork/join/loop</option>
           <option value="features/14-send-accept.mmd">14: send/accept (messaging)</option>
           <option value="features/15-sequence-view.mmd">15: Sequence View (message from/to, lifelines)</option>
-          <option value="features/16-nested-items.mmd">16: nested items (item trees under ports, flows)</option>
+          <option value="features/16-nested-items-in-port.mmd">16a: nested items — payload in port (model of record)</option>
+          <option value="features/16-nested-items-bound-to-port.mmd">16b: nested items — payload bound to port (drawable)</option>
         </optgroup>
+      </select>
+      &nbsp;&nbsp;Nested items:
+      <select id="itemLayout">
+        <option value="tree">tree (indented list)</option>
+        <option value="containment">containment (boxes in boxes)</option>
       </select>
     </p>
     <div class="cols">
@@ -71,11 +77,22 @@
       import sysmlV2Diagram from '/src/detector.ts';
 
       mermaid.registerExternalDiagrams([sysmlV2Diagram]);
-      mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' });
 
       const textarea = document.getElementById('source');
       const target = document.getElementById('diagram');
       const exampleSelect = document.getElementById('example');
+      const itemLayoutSelect = document.getElementById('itemLayout');
+
+      // Re-init (not just re-render) so the new `sysml.itemLayout` reaches the
+      // plugin via mermaid's config; mermaid.initialize merges on each call.
+      function applyConfig() {
+        mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: 'loose',
+          sysml: { itemLayout: itemLayoutSelect.value },
+        });
+      }
+      applyConfig();
 
       let renderId = 0;
       async function render() {
@@ -101,6 +118,10 @@
       }
 
       exampleSelect.addEventListener('change', () => loadExample(exampleSelect.value));
+      itemLayoutSelect.addEventListener('change', () => {
+        applyConfig();
+        render();
+      });
       textarea.addEventListener('input', () => {
         clearTimeout(window.__renderTimer);
         window.__renderTimer = setTimeout(render, 300);

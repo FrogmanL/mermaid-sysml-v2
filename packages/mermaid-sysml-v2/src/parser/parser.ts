@@ -386,6 +386,7 @@ function parseNestedBody(p: ParserState): NestedItemNode[] {
       const node: NestedItemNode = {
         label: nestedLabel(direction, keyword === 'port' ? 'port' : undefined, name, type, typeKind, multiplicity),
         ref: name ?? (typeKind === ':>>' || typeKind === ':>' ? type : undefined),
+        ...(keyword === 'port' ? { isPort: true } : {}),
         children: [],
       };
       if (p.at('{')) node.children = parseNestedBody(p);
@@ -690,6 +691,10 @@ function parsePartBody(p: ParserState, def: PartDefNode): void {
     }
     if (p.at('dependency')) {
       (def.dependencies ??= []).push(...parseDependency(p).map(({ source, target }) => ({ source, target })));
+      continue;
+    }
+    if (p.at('bind')) {
+      (def.bindings ??= []).push(parseBind(p));
       continue;
     }
     // Nested defs (including `attribute def`/`enum def` — this subset only
@@ -1210,6 +1215,23 @@ function parseDependency(p: ParserState): TraceabilityNode[] {
   while (p.at(',')) { p.advance(); targets.push(parseFeaturePath(p)); }
   if (p.at(';')) p.advance();
   return sources.flatMap((source) => targets.map((target) => ({ kind: 'dependency' as const, source, target })));
+}
+
+/**
+ * `bind [name] lhs = rhs;` — a binding connector, which asserts its two ends are
+ * the same feature. Captured as a source/target pair (both normalized to dotted
+ * paths); the optional connector name is tolerated when a second path precedes
+ * the `=`. Used by the "payload bound to port" convention to tie an externalized
+ * item to a port's payload (`bind video = hdmiOut.video`).
+ */
+function parseBind(p: ParserState): { source: string; target: string } {
+  p.expect('bind');
+  let source = parseFeaturePath(p);
+  if (!p.at('=')) source = parseFeaturePath(p); // the first path was a connector name
+  p.expect('=');
+  const target = parseFeaturePath(p);
+  if (p.at(';')) p.advance();
+  return { source, target };
 }
 
 /** `satisfy <req> by <target>;` / `verify <req> by <target>;` — the same shape, differing only in keyword. */

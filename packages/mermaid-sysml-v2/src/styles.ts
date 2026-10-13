@@ -26,6 +26,14 @@ const getStyles = (options: any): string => `
 .sysml-v2 .child rect {
   fill: ${options.tertiaryColor ?? options.mainBkg ?? '#eee'};
 }
+.sysml-v2 rect.item-box {
+  fill: ${options.mainBkg ?? options.primaryColor ?? '#eee'};
+  stroke: ${options.nodeBorder ?? options.primaryBorderColor ?? '#999'};
+  stroke-width: 1px;
+}
+.sysml-v2 text.item-box-label {
+  fill: ${options.textColor ?? options.primaryTextColor ?? '#333'};
+}
 .sysml-v2 rect.port {
   fill: ${options.nodeBorder ?? options.primaryBorderColor ?? '#999'};
   stroke: ${options.nodeBorder ?? options.primaryBorderColor ?? '#999'};
@@ -64,6 +72,15 @@ const getStyles = (options: any): string => `
   stroke: ${options.lineColor ?? '#999'};
   stroke-width: 1px;
   stroke-dasharray: 4 3;
+}
+.sysml-v2 path.dependency-line {
+  stroke: ${options.lineColor ?? '#999'};
+  stroke-width: 1px;
+  stroke-dasharray: 4 3;
+  fill: none;
+}
+.sysml-v2 circle.dependency-source {
+  fill: ${options.lineColor ?? '#999'};
 }
 .sysml-v2 polyline.dependency-arrowhead {
   fill: none;

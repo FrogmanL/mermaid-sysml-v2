@@ -1474,6 +1474,7 @@ satisfy req1 by used;`);
       {
         label: 'port :>> hdmiOut',
         ref: 'hdmiOut',
+        isPort: true,
         children: [
           {
             label: 'out :>> video',
@@ -1496,6 +1497,22 @@ describe('dependencies inside a part body', () => {
     const sys = model.definitions[0];
     if (sys.kind !== 'partDef') throw new Error('expected partDef');
     expect(sys.dependencies).toEqual([{ source: 'capture.usbOut.p1', target: 'dvd.hdmiOut.p1' }]);
+  });
+});
+
+describe('binding connectors inside a part body', () => {
+  it('captures `bind lhs = rhs;` as a source/target pair (the payload-bound-to-port convention), normalized to dotted', () => {
+    const model = parseSysml('part def Sys { item video : HDMIMessage; bind video = hdmiOut.video; }');
+    const sys = model.definitions[0];
+    if (sys.kind !== 'partDef') throw new Error('expected partDef');
+    expect(sys.bindings).toEqual([{ source: 'video', target: 'hdmiOut.video' }]);
+  });
+
+  it('tolerates a named binding connector and `::` paths', () => {
+    const model = parseSysml('part def Sys { bind b1 capture::data = usbOut::data; }');
+    const sys = model.definitions[0];
+    if (sys.kind !== 'partDef') throw new Error('expected partDef');
+    expect(sys.bindings).toEqual([{ source: 'capture.data', target: 'usbOut.data' }]);
   });
 });
 
