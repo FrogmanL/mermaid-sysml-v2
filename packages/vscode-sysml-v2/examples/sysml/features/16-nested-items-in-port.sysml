@@ -1,3 +1,11 @@
+// Nested port payload, convention A: "payload nested in port" (model of record).
+//
+// Each port's payload item is declared inside the port and its nested data
+// structure is redefined through the port (`port :>> hdmiOut { out item :>> video
+// { ... } }`). This is the semantically canonical way to model it, but the deep
+// payload structure lives *inside* the port, so it can't be drawn without
+// rendering it inside the port symbol. See 16-nested-items-bound-to-port.sysml
+// for the same system expressed so the payload structure can be diagrammed.
 package SubSystemDefinitions { part def Subsystem; }
 package DataElements {
     private import ScalarValues::*;
